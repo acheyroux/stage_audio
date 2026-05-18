@@ -1,18 +1,19 @@
 name: audio-denoising
+
 channels:
-  - conda-forge
   - pytorch
+  - conda-forge
+
 dependencies:
   - python=3.11
-  - pytorch
-  - torchaudio
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
   - numpy
   - scipy
   - matplotlib
   - jupyter
   - librosa
-  - soundfile
+  - pysoundfile
   - tqdm
   - pip
-  - pip:
-      - deepinv
