@@ -97,3 +97,27 @@ def listen(audio,samplerate):
     '''
     display(Audio(audio, rate=samplerate))
     return
+
+def find_oracle_threshold(x,xb,sigma,fs,denoise_func):
+    '''
+    Retourne le seuil oracle 
+    --- In ---
+    x : signal pur (ndarray)
+    xb : signal bruite (ndarray)
+    sigma : ecart type du bruit gaussien
+    fs : frequence d'echantillonage (float)
+    denoise_func : fonction de debruitage sous forme (y, sigma, threshold, fs) --> (t_denoise, y_denoise)
+    --- Out ---
+    oracle_threshold : seuil oracle du signal (float)
+    '''
+    thresholds=np.linspace(0,3,100)
+    oSNR_max=-np.inf
+    oracle_threshold=0
+    for thresh in thresholds:
+        _,x_d=denoise_func(xb,sigma,thresh,fs)
+        max_len=min(len(x),len(x_d))
+        oSNR=SNR(x[:max_len],(x_d[:max_len]-x[:max_len]))
+        if oSNR>=oSNR_max:
+            oSNR_max=oSNR
+            oracle_threshold=thresh
+    return oracle_threshold
