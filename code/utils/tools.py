@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import stft, istft
+from IPython.display import Audio, display
 
 def signal(x,fs,show=False):
     '''
@@ -57,7 +58,7 @@ def spectrogram(x, fs: float, show=False):
     f : axe frequentiel
     Sgram : de
     '''
-    f,t,Sgram=stft(x,fs,nperseg=1000)
+    f,t,Sgram=stft(x,fs,window='hann',nperseg=1024,noverlap=256,boundary="zeros",padded=True,)
     if show:
         plt.pcolormesh(t, f, np.abs(Sgram))
         plt.title('STFT Magnitude')
@@ -66,3 +67,33 @@ def spectrogram(x, fs: float, show=False):
         plt.colorbar()
         plt.show()
     return t,f,Sgram
+
+def denoise_spectral_sub(y, sigma, threshold, fs):
+    '''
+    Retourne le signal apres soustraction spectrale
+    --- In ---
+    y : signal (ndarray)
+    sigma : ecart type du bruit (float)
+    threshold : seuil de coupure (float)
+    fs : frequence d'echantillonage (float)
+    show : trace le signal temporel (bool)
+    --- Out ---
+    x : signal apres soustraction spectrale (ndarray)
+    '''
+    y_t,y_f,y_Sgram=spectrogram(y,fs)
+    mask=np.abs(y_Sgram)>=threshold*sigma**2
+    y_Sgram_mask= y_Sgram*mask
+    t_denoise,y_denoise=istft(y_Sgram_mask,fs,window='hann',nperseg=1024,noverlap=256,boundary=True)
+    return t_denoise,y_denoise
+
+def listen(audio,samplerate):
+    '''
+    Affiche le lecteur sonore pour le signal d'entree
+    --- In ---
+    audio : signal (ndarray)
+    samplerate : frequence d'echantillonage (float)
+    --- Out ---
+    None
+    '''
+    display(Audio(audio, rate=samplerate))
+    return

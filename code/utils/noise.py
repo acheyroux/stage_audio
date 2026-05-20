@@ -25,13 +25,14 @@ def add_white_noise(x, fs: float, target_SNR: float, seed=0, show=False):
     --- In ---
     x : signal (ndarray)
     fs : frequence d'echantillonage (float)
-    target_SNR : DSP recherchee en sortie (float)
+    target_SNR : SNR recherchee en sortie en dB (float)
     show : trace le signal en sortie (bool)
     --- Out ---
     x_b : signal bruite (ndarray)
+    target_sigma : ecart type du bruit (float)
     '''
     target_sigma=(signal_power(x)*10**-(target_SNR/10))**.5
     x_b=x+white_noise(len(x),fs,0,target_sigma,seed,False)
     if show:
         signal(x_b,fs,True)
-    return x_b
+    return x_b,target_sigma
