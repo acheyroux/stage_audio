@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from metrics import signal_power
 
 def white_noise(N: int, fs: float, mu: float, sigma: float,seed=0,show=False):
     '''
