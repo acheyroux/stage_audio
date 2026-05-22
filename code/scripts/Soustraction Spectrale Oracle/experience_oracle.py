@@ -18,28 +18,36 @@ for full_line in parameters:
     line=full_line.strip()
     if not line[0]=='#':
         key,value=line.split('=',1)
-        val=value.strip()
-        if val.isdigit():
-            val=int(val)
-        elif val=='True':
-            val=True
-        elif val=='False':
-            val=False
+        val=value.strip().split(',')
+        if len(val)!=1:
+            for i in range(len(val)):
+                val[i]=float(val[i].strip())
+        else:
+            val=val[0].strip()
+            if val.isdigit():
+                val=int(val)
+            elif val=='True':
+                val=True
+            elif val=='False':
+                val=False
         params[key.strip()]=val
 
 #Import du fichier sonore
 sound,samplerate=sf.read('../../../data/'+params['pure_sound'])
 
-#Bruitage
-noisy_sound,sigma=noise.add_white_noise(sound,samplerate,params['isnr'])
+#Parcours la liste des iSNR de params.txt
+for isnr in params['isnr']:
+    #Bruitage
+    noisy_sound,sigma=noise.add_white_noise(sound,samplerate,isnr)
+    
+    #Recherche seuil oracle
+    oracle_threshold,figure=find_oracle_threshold(sound,noisy_sound,sigma,samplerate,denoise_spectral_sub,True)
 
-#Recherche seuil oracle
-oracle_threshold,figure=find_oracle_threshold(sound,noisy_sound,sigma,samplerate,denoise_spectral_sub,True)
+    #Debruitage par seuil oracle
+    _,denoised_sound=denoise_spectral_sub(noisy_sound, sigma, oracle_threshold, samplerate)
 
-#Debruitage par seuil oracle
-_,denoised_sound=denoise_spectral_sub(noisy_sound, sigma, oracle_threshold, samplerate)
-
-#Export des resultats
-sf.write('../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/noisy_sound.wav', noisy_sound, samplerate)
-sf.write('../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/denoised_sound.wav', denoised_sound, samplerate)
-figure.savefig("../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/seuil_oracle.jpg", dpi=300, bbox_inches="tight")
+    #Export des resultats
+    figure.savefig("../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/seuil_oracle_isnr_"+str(isnr)+".jpg", dpi=300, bbox_inches="tight")
+    if params['export_audio']:
+        sf.write('../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/noisy_sound_isnr_'+str(isnr)+'.wav', noisy_sound, samplerate)
+        sf.write('../../../results/exp_20260521_soustraction_spectrale_seuil_oracle/denoised_sound_isnr_'+str(isnr)+'.wav', denoised_sound, samplerate)
