@@ -1,6 +1,6 @@
 # Compte-rendus des meetings
 
-## Préparation Meeting du 26/05/2026 (Modifiée 22/05/2026)
+## Préparation Meeting du 25/05/2026 (Modifiée 22/05/2026)
 
 **Fait :**
 - Création du GitHub et de la structure du dépot
