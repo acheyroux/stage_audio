@@ -10,4 +10,4 @@ Il génère des fichiers ```noisy_sound.wav``` et ```denoised_sound.wav``` pour 
 4. Recueillir les données
 
 ### Résultats
-Nous remarquons que le debruiteur DEMUCS filtre le son vocal correctement mais produit un résultat incohérent pour le son musical, possiblement car il est entrainé sur de la parole et non de la musique. En effet, pour un son purement instrumental, 
+Nous remarquons que le debruiteur DEMUCS filtre le son vocal correctement mais produit un résultat incohérent pour le son musical, possiblement car il est entrainé sur de la parole et non de la musique. En effet, pour un son purement instrumental, les bruit musicaux sont filtrés.

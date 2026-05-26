@@ -42,6 +42,10 @@ for full_line in parameters:
 #Import du fichier sonore et modele DEMUCS
 sound,samplerate=sf.read('../../../data/'+params['pure_sound'])
 model=getattr(pretrained, params['demucs_pretrained_model'])()
+model_sample_rate=model.sample_rate
+
+#Convertit le son pour avoir une frequence d'echantillonage coherente avec le modele
+sound=convert_audio(torch.from_numpy(sound).float()[None, :],samplerate,model_sample_rate,1)[0].detach().cpu().numpy()
 
 #Parcours la liste des iSNR de params.txt
 SNR_results=''
@@ -50,17 +54,16 @@ for isnr in params['isnr']:
     son_b,sigma=noise.add_white_noise(sound,samplerate,isnr)
     
     #Debruitage DEMUCS
-    model_sample_rate=model.sample_rate
-    son_bt=convert_audio(torch.from_numpy(son_b).float()[None, :],samplerate,model_sample_rate,1)
+    son_bt=torch.from_numpy(son_b).float()[None, :]
     son_dt=model(son_bt[None])
     son_d=son_dt[0, 0].detach().cpu().numpy()
     osnr=SNR(sound,son_d)
     
     #Export des resultats
     #figure.savefig(path+"".jpg", dpi=300, bbox_inches="tight")  --ignore
-    SNR_results+="iSNR="+str(isnr)+"\tSNR="+str(osnr)+"\n"
+    SNR_results+="sigma="+str(sigma)+"\tiSNR="+str(isnr)+"\tSNR="+str(osnr)+"\n"
     if params['export_audio']:
-        sf.write(path+'/noisy_sound_isnr_'+str(isnr)+'.wav', son_b, samplerate)
+        sf.write(path+'/noisy_sound_isnr_'+str(isnr)+'.wav', son_b, model_sample_rate)
         sf.write(path+'/DEMUCS_denoised_sound_isnr_'+str(isnr)+'.wav', son_d, model_sample_rate)
     
 #Creation du fichier SNR.txt
