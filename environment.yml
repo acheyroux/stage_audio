@@ -16,6 +16,8 @@ dependencies:
   - librosa
   - pysoundfile
   - tqdm
+  - pesq
   - pip
   - pip:
       - denoiser
+      - sgmse
