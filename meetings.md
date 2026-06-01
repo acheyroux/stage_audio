@@ -1,6 +1,22 @@
 # Compte-rendus des meetings
+## Meeting du 01/06/2026 (Modifiée 01/06/2026)
 
-## Préparation Meeting du 25/05/2026 (Modifiée 22/05/2026)
+**Fait :**
+- Experiences DEMUCS et SGMSE+ pour des extrait vocaux et musicaux
+- Comparaison des SNR de sortie entre soustraction spectrale, DEMUCS, et SGMSE+
+- Création de Overleaf et de la bibliographie
+
+**À faire :**
+- Créer un script qui prend les valeurs de SNR pour toutes les méthodes et qui renvoi le graphe comparatif
+- Mettre en place des tests d'utilisation de SURE
+- Accéder aux serveurs de calculs du laboratoire
+- Moyenner chaque courbe SNR et calculer la déviation standard en utilisant 10 extraits musicaux
+- Préciser les fréquences d'échantillonage et les paramètres stft
+
+**Questions :**
+- Est ce que je cré un graphe pour la voix et un pour les extraits musicaux
+
+## Meeting du 25/05/2026 (Modifiée 22/05/2026)
 
 **Fait :**
 - Création du GitHub et de la structure du dépot
