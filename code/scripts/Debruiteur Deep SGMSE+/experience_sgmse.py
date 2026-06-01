@@ -46,17 +46,17 @@ sound,samplerate=sf.read('../../../data/'+params['pure_sound'])
 model=ScoreModel.load_from_checkpoint(ckpt_path, map_location=params['sgmse_device'])
 model.eval()
 model.to(params['sgmse_device'])
-
+model_sample_rate=16000
 
 sound=sound.astype(np.float32)
-son_t=convert_audio(torch.from_numpy(sound).float()[None, :],samplerate,16000,1)
-
+son_t=convert_audio(torch.from_numpy(sound).float()[None, :],44100,16000,1)
+sound=son_t[0].detach().cpu().numpy()
 #Parcours la liste des iSNR de params.txt
 SNR_results=''
 for isnr in params['isnr']:
     #Bruitage
-    son_bt,sigma=noise.add_white_noise(sound,samplerate,isnr)
-
+    son_b,sigma=noise.add_white_noise(sound,model_sample_rate,isnr)
+    son_bt=torch.from_numpy(son_b).float()[None, :]
     #Debruitage SGMSE+
     Y=model._forward_transform(model._stft(son_bt))
     Y=Y[None]
@@ -65,7 +65,7 @@ for isnr in params['isnr']:
     with torch.no_grad():
         sample, _ = sampler()
     son_dt=model.to_audio(sample.squeeze(), son_t.shape[-1])
-    son_d=son_dt.detach().cpu().numpy()
+    son_d=son_dt[0, 0].detach().cpu().numpy()
     osnr=SNR(sound,son_d)
     
     #Export des resultats
@@ -73,10 +73,10 @@ for isnr in params['isnr']:
     SNR_results+="sigma="+str(sigma)+"\tiSNR="+str(isnr)+"\tSNR="+str(osnr)+"\n"
     if params['export_audio']:
         sf.write(path+'/noisy_sound_isnr_'+str(isnr)+'.wav', son_b, model_sample_rate)
-        sf.write(path+'/DEMUCS_denoised_sound_isnr_'+str(isnr)+'.wav', son_d, model_sample_rate)
+        sf.write(path+'/SGMSE_denoised_sound_isnr_'+str(isnr)+'.wav', son_d, model_sample_rate)
     
 #Creation du fichier SNR.txt
-with open(path+'/SNR.txt','w') as d:
+with open(path+'/SNR SGMSE+.txt','w') as d:
    d.write(SNR_results)
 
 #Copiage des parametres utilises
