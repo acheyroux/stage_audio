@@ -64,13 +64,14 @@ Specsub_data={}
 with open("SNR Data/SNR Soustraction Spectrale.csv", "r") as csvfile:
     data = csv.reader(csvfile)
     for data_list in data:
-        if data_list[0]=='Threshold':
-            thresholds=[float(i) for i in data_list[1:]]
-        else:
-            item_isnr=float(data_list[0])
-            if not(item_isnr in present_iSNRs):
-                present_iSNRs.append(item_isnr)
-            Specsub_data[item_isnr]=[item_isnr,[float(j) for j in data_list[1:]]]
+        if len(data_list)!=0:
+            if data_list[0]=='Threshold':
+                thresholds=[float(i) for i in data_list[1:]]
+            else:
+                item_isnr=float(data_list[0])
+                if not(item_isnr in present_iSNRs):
+                    present_iSNRs.append(item_isnr)
+                Specsub_data[item_isnr]=[item_isnr,[float(j) for j in data_list[1:]]]
 
 for isnr in present_iSNRs:
     fig,ax=plt.subplots()
