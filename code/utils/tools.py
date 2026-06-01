@@ -153,5 +153,5 @@ def find_oracle_threshold(x,xb,sigma,fs,denoise_func,graph=False):
         ax.set_xlabel("Threshold")
         ax.set_ylabel("oSNR")
         ax.set_title("Seuil Oracle")
-        return oracle_threshold,fig
+        return oracle_threshold,fig,thresholds,oSNR_list
     return oracle_threshold

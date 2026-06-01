@@ -67,7 +67,7 @@ for isnr in params['isnr']:
         sf.write(path+'/DEMUCS_denoised_sound_isnr_'+str(isnr)+'.wav', son_d, model_sample_rate)
     
 #Creation du fichier SNR.txt
-with open(path+'/SNR.txt','w') as d:
+with open(path+'/SNR DEMUCS.txt','w') as d:
    d.write(SNR_results)
 
 #Copiage des parametres utilises
@@ -75,3 +75,4 @@ with open("params.txt", 'r') as file:
     content = file.read()
 with open(path+"/params.txt", 'w') as otherfile:
     otherfile.write(content)
+
