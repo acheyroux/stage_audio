@@ -15,6 +15,7 @@
 
 **Questions :**
 - Est ce que je cré un graphe pour la voix et un pour les extraits musicaux
+- Pourquoi DEMUCS produit une oSNR beaucoups moins bonne que la soustraction spectrale pour les extraits vocaux alors qu'elle a un son plus propre
 
 ## Meeting du 25/05/2026 (Modifiée 22/05/2026)
 
