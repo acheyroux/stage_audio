@@ -65,7 +65,8 @@ for isnr in params['isnr']:
     with torch.no_grad():
         sample, _ = sampler()
     son_dt=model.to_audio(sample.squeeze(), son_t.shape[-1])
-    son_d=son_dt[0, 0].detach().cpu().numpy()
+    son_d=son_dt.detach().cpu().numpy()
+    son_d = np.squeeze(son_d)
     osnr=SNR(sound,son_d)
     
     #Export des resultats
