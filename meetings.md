@@ -1,4 +1,20 @@
 # Compte-rendus des meetings
+## Meeting du 08/06/2026 (Modifiée 05/06/2026)
+
+**Fait :**
+- Graphe comparatif des méthodes (oSNR en fonction des seuils)
+- Implémentation inititale du code pour la soustraction spectrale par SURE
+- Création du script qui prend les résultats des expériences et retourne un graphe comparatif
+
+**À faire :**
+- Faire un script pour mesurer la déviation standard pour ~10 extraits vocaux et musicaux
+- Normaliser le seuillage sur le graphe entre 0 et 1
+- Moyenner chaque courbe SNR et calculer la déviation standard en utilisant 10 extraits musicaux
+- Préciser les fréquences d'échantillonage et les paramètres stft
+
+**Questions :**
+- Comment calculer la divergence div(x^) (car matrice NxN difficile à calculer)
+
 ## Meeting du 01/06/2026 (Modifiée 01/06/2026)
 
 **Fait :**
