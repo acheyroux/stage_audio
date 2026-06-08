@@ -21,3 +21,4 @@ dependencies:
   - pip:
       - denoiser
       - sgmse
+      - deepinv
