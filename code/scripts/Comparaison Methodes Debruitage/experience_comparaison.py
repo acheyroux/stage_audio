@@ -73,10 +73,28 @@ with open("SNR Data/SNR Soustraction Spectrale.csv", "r") as csvfile:
                     present_iSNRs.append(item_isnr)
                 Specsub_data[item_isnr]=[item_isnr,[float(j) for j in data_list[1:]]]
 
+#SURE Sosutraction Spectrale
+SURE_thresh=-1
+with open("SNR Data/Seuil SURE.txt",'r') as file:
+    for full_line in file:
+        line=full_line.strip()
+        if line:
+            val=line.strip().split('\t')
+            SURE_thresh=float(val[1].strip())
+
 for isnr in present_iSNRs:
     fig,ax=plt.subplots()
     if isnr in Specsub_data:
         ax.plot(thresholds,Specsub_data[isnr][1],label='Spectral Sub')
+        index_oracle=np.argmax(Specsub_data[isnr][1])
+        oracle_thres,oracle_oSNR=thresholds[index_oracle],Specsub_data[isnr][1][index_oracle]
+        ax.scatter(oracle_thres,oracle_oSNR,c='r',)
+        ax.annotate('Oracle', (oracle_thres,oracle_oSNR),xytext=(oracle_thres+.2,oracle_oSNR+.2),arrowprops=dict(arrowstyle="->"))
+        if SURE_thresh!=-1:
+            SURE_index=np.argmin(np.abs(np.array(thresholds) - SURE_thresh))
+            SURE_oSNR=Specsub_data[isnr][1][SURE_index]
+            ax.scatter(SURE_thresh,SURE_oSNR,c='r',)
+            ax.annotate('SURE', (SURE_thresh,SURE_oSNR),xytext=(SURE_thresh+.2,SURE_oSNR+.2),arrowprops=dict(arrowstyle="->"))
     if isnr in DEMUCS_data:
         ax.plot(thresholds,np.ones_like(thresholds)*DEMUCS_data[isnr][1],label='DEMUCS')
     if isnr in SGMSE_data:
