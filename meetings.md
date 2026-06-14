@@ -1,4 +1,19 @@
 # Compte-rendus des meetings
+## Meeting du 15/06/2026 (Modifiée 14/06/2026)
+
+**Fait :**
+- Implementation du seuillage par SURE
+- Ajout de SURE sur la comparaison graphique 
+- Démonstration de la formule de SURE en 1D
+
+**À faire :**
+- Faire un script pour mesurer la déviation standard pour ~10 extraits vocaux et musicaux
+- Préciser les fréquences d'échantillonage et les paramètres stft
+- Créer un script expérience propre de seuillage par SURE
+
+**Questions :**
+- Comment valider que la méthode SURE fonctionne correctement par rapport à l'oracle
+
 ## Meeting du 08/06/2026 (Modifiée 05/06/2026)
 
 **Fait :**
