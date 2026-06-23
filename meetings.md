@@ -1,4 +1,18 @@
 # Compte-rendus des meetings
+## Meeting du 23/06/2026 (Modifiée 22/06/2026)
+
+**Fait :**
+- Moyennage de la courbe oSNR pour N extraits musicaux
+- Graphique et export CSV de la soustraction spectrale + incertitude
+
+**À faire :**
+- Tester SURE pour DEMUCS et SGMSE+
+- Moyennage de SURE + incertitude sur le graphique pour plusieurs extraits
+- Utiliser sigma comme paramètre de SURE pour tracer un graphique
+
+**Questions :**
+- Est ce que prendre la déviation standard pour chaque seuillage individuellement est correct
+
 ## Meeting du 15/06/2026 (Modifiée 14/06/2026)
 
 **Fait :**
