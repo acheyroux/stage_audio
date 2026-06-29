@@ -6,8 +6,8 @@
 #padded=True
 #
 #---- vvv Edition possible vvv -----
-isnr=0,5,10,15
-pure_sound=son4.wav
+isnr=5
+pure_sound_folder=sons
 #Dossier pour placer le son_pur
 path=../../../data/
-export_audio=True
+export_audio=False

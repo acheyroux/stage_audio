@@ -3,7 +3,9 @@
 Ce script ajoute du bruit blanc gaussien artificiel sur un fichier sonore pur et le débruite par soustraction spectrale en seuil oracle.
 Il génère un fichier ```noisy_sound.wav```, un fichier ```denoised_sound.wav```, et un graphe montrant le seuil oracle.
 
-### Instructions d'utilisation
+Le script multiple effectue le même script sur tous les extraits sonores dans le dossier précisé et cré un fichier ```.csv``` et un graphe moyennant les courbes oSNR trouvés et les valeurs déterminés par SURE
+
+### Instructions d'utilisation - (Rq : Fonctionnement analogue pour le script multiple)
 1. Placer un fichier sonore de format ```___.wav``` dans le dossier ```/stage_audio/data/``` (le créer si nécessaire)
 2. Ouvrir le fichier ```params.txt``` pour confirmer les paramètres ou les modifier dans le cas échéant
 3. Lancer le script a l'aide de la commande ```python experience_oracle.py``` dans l'environnement (audio-denoising) de Miniforge Prompt
