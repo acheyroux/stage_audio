@@ -4,13 +4,14 @@
 **Fait :**
 - Moyennage + incertitude pour SURE
 - Bibliographie Overleaf
+- Mise à jour GitHub
 
 **À faire :**
 - Remplacer soustraction spectrale par DEMUCS et SGMSE+ (pour SURE)
-- Nettoyer le code et mettre GitHub à jour
+- Nettoyer et optimiser les scripts
 - Utiliser sigma comme paramètre de SURE pour tracer un graphique
-- Rediger le rapport écrit
 - Bruit coloré + UNSURE
+- Rédiger le rapport écrit
 
 **Questions :**
 - Comment limiter le seuil entre 0 et 1 si le suillage peut se faire entre 0 et +inf
