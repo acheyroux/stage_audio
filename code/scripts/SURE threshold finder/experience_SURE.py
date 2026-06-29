@@ -44,10 +44,11 @@ for full_line in parameters:
 #Import du fichier sonore
 sound,samplerate=sf.read('../../../data/'+params['pure_sound'])
 
-sigmas=np.linspace(0.01,1,10)
-thresholds=np.linspace(0,30,100)
-SURE_oSNR=[]
+sigmas=np.logspace(-4,0,10)
+thresholds=np.linspace(0,1,100)
+
 for isnr in params['isnr']:
+    SURE_oSNR=[]
     #Bruitage
     noisy_sound,sig=noise.add_white_noise(sound,samplerate,isnr)
     for sigma in sigmas:
