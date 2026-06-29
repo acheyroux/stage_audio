@@ -1,4 +1,20 @@
 # Compte-rendus des meetings
+## Meeting du 29/06/2026 (Modifiée 28/06/2026)
+
+**Fait :**
+- Moyennage + incertitude pour SURE
+- Bibliographie Overleaf
+
+**À faire :**
+- Remplacer soustraction spectrale par DEMUCS et SGMSE+ (pour SURE)
+- Nettoyer le code et mettre GitHub à jour
+- Utiliser sigma comme paramètre de SURE pour tracer un graphique
+- Rediger le rapport écrit
+- Bruit coloré + UNSURE
+
+**Questions :**
+- Comment limiter le seuil entre 0 et 1 si le suillage peut se faire entre 0 et +inf
+
 ## Meeting du 23/06/2026 (Modifiée 22/06/2026)
 
 **Fait :**
