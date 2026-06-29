@@ -15,6 +15,7 @@
 
 **Questions :**
 - Comment limiter le seuil entre 0 et 1 si le suillage peut se faire entre 0 et +inf
+- Est ce que je trace oSNR en fonction de sigma pour SURE
 
 ## Meeting du 23/06/2026 (Modifiée 22/06/2026)
 
