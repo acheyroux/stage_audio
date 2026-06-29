@@ -1,0 +1,6 @@
+isnr=0,5,10,15
+pure_sound=son2.wav
+#Dossier pour placer le son_pur
+path=../../../data/
+export_audio=True
+demucs_pretrained_model=dns64

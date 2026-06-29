@@ -5,11 +5,11 @@
 - Moyennage + incertitude pour SURE
 - Bibliographie Overleaf
 - Mise à jour GitHub
+- Utiliser sigma comme paramètre de SURE pour tracer un graphique (basse résolution)
 
 **À faire :**
 - Remplacer soustraction spectrale par DEMUCS et SGMSE+ (pour SURE)
 - Nettoyer et optimiser les scripts
-- Utiliser sigma comme paramètre de SURE pour tracer un graphique
 - Bruit coloré + UNSURE
 - Rédiger le rapport écrit
 
