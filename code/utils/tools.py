@@ -102,12 +102,14 @@ def denoise_spectral_sub(y,sigma,threshold,fs):
     y_t,y_f,y_Sgram=spectrogram(y,fs)
     Sy=np.abs(y_Sgram)**2
     Sb=white_noise_DSP(sigma=sigma,signal_length=len(y),fs=fs)
-    #Sx=np.maximum(Sy-threshold*maxi*Sb,0)
     Sx=np.maximum(Sy-threshold*maxi*Sb,0)
-    #Sx=np.maximum(Sy*(1-threshold*Sb/Sy),0)
     H=Sx/Sy
     #mask=np.abs(y_Sgram)>=threshold*sigma**2
     y_Sgram_mask= np.sqrt(H)*y_Sgram
+    
+    lamb=threshold*np.max(y_Sgram)
+    y_Sgram_mask=y_Sgram*np.maximum(1-(lamb/np.abs(y_Sgram))**2,np.ones_like(y_Sgram)*0)
+    
     t_denoise,y_denoise=istft(y_Sgram_mask,fs,window='hann',nperseg=1024,noverlap=768,boundary=True)
     return t_denoise,y_denoise
 
@@ -140,7 +142,7 @@ def find_oracle_threshold(x,xb,sigma,fs,denoise_func,graph=False):
     thresholds=np.linspace(0,40,100)
     alphas=np.linspace(0, 1, 100)
     #thresholds = alphas * np.linalg.norm(xb, ord=np.inf)
-    thresholds=np.linspace(0,1,100)
+    thresholds=np.logspace(-3,0,100)
     oSNR_max=-np.inf
     oSNR_list=[]
     oracle_threshold=0
@@ -161,7 +163,7 @@ def find_oracle_threshold(x,xb,sigma,fs,denoise_func,graph=False):
         return oracle_threshold,fig,thresholds,oSNR_list
     return oracle_threshold
 
-#SURE
+#SURE (cf ChatGPT)
 import numpy as np
 import torch
 from torch import nn
