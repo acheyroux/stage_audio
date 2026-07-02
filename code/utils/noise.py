@@ -28,6 +28,7 @@ def add_white_noise(x, fs: float, target_SNR: float, seed=0, show=False):
     x : signal (ndarray)
     fs : frequence d'echantillonage (float)
     target_SNR : SNR recherchee en sortie en dB (float)
+    seed : graine pour la generation aleatoire NumPy (float)
     show : trace le signal en sortie (bool)
     --- Out ---
     x_b : signal bruite (ndarray)
@@ -38,3 +39,17 @@ def add_white_noise(x, fs: float, target_SNR: float, seed=0, show=False):
     if show:
         signal(x_b,fs,True)
     return x_b,target_sigma
+
+def add_colour_noise(x,fs,target_SNR,seed=0,show=False):
+    '''
+    Ajoute du bruit colore au signal jusqu'a obtenir le SNR total recherche.
+    --- In ---
+    x : signal (ndarray)
+    fs : frequence d'echantillonage (float)
+    target_SNR : SNR recherchee en sortie en dB (float)
+    seed : graine pour la generation aleatoire NumPy (float)
+    show : trace le signal en sortie (bool)
+    --- Out ---
+    x_b : signal bruite (ndarray)
+    target_sigma : ecart type du bruit (float)
+    '''
