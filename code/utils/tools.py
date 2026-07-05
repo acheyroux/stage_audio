@@ -183,7 +183,7 @@ def find_oracle_threshold(x,xb,sigma,fs,denoise_func,graph=False):
 from torch import nn
 import deepinv as dinv
 
-'''
+
 class SpectralSubNumpyWrapper(nn.Module):
     """
     Wraps your actual NumPy spectral subtraction function so DeepInv can call it.
@@ -350,7 +350,7 @@ def deepinv_sure_spectral_sub_threshold_search(
     best_denoised = denoised_chunks.reshape(-1)[:original_len]
 
     return best_denoised, best_threshold, sure_values
-'''
+
 
 class NumpyDenoiserWrapper(nn.Module):
     def __init__(self, denoise_func, sigma, param, fs):

@@ -12,7 +12,7 @@ from denoiser.dsp import convert_audio
 sys.path.append("../../utils")
 import noise
 from metrics import SNR
-from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search
+from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search
 
 #Creation du dossier de l'experience
 path="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
@@ -121,20 +121,20 @@ for isnr in params['isnr']:
         for sigma in params['sigma']:
 
             #Recherche du seuil SURE avec ce sigma
-            denoised_sure,sure_threshold,sure_values=deepinv_sure_param_search(
+            denoised_sure, sure_threshold, sure_values = deepinv_sure_spectral_sub_threshold_search(
                 y_np=noisy_sound,
-                param_values=thresholds,
+                thresholds=thresholds,
                 sigma=sigma,
                 fs=samplerate,
                 denoise_func=denoise_spectral_sub,
                 chunk_size=16384,
                 tau=0.01,
                 n_sure_repeats=1,
-                param_name='threshold'
             )
 
             #Calcul oSNR
-            osnr=SNR(sound,denoised_sure)
+            _,denoised_sure_specsub=denoise_spectral_sub(noisy_sound,sigma,sure_threshold,samplerate)
+            osnr=SNR(sound,denoised_sure_specsub)
 
             oSNR_sigma_list.append(osnr)
             sure_threshold_list.append(sure_threshold)
