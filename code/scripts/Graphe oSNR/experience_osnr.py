@@ -12,7 +12,7 @@ from denoiser.dsp import convert_audio
 sys.path.append("../../utils")
 import noise
 from metrics import SNR
-from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search
+from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_demucs_drywet_search_cached,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search_torch
 
 #Creation du dossier de l'experience
 path="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
@@ -121,13 +121,12 @@ for isnr in params['isnr']:
         for sigma in params['sigma']:
 
             #Recherche du seuil SURE avec ce sigma
-            denoised_sure, sure_threshold, sure_values = deepinv_sure_spectral_sub_threshold_search(
+            denoised_sure, sure_threshold, sure_values = deepinv_sure_spectral_sub_threshold_search_torch(
                 y_np=noisy_sound,
                 thresholds=thresholds,
                 sigma=sigma,
                 fs=samplerate,
-                denoise_func=denoise_spectral_sub,
-                chunk_size=16384,
+                chunk_size=65536,
                 tau=0.01,
                 n_sure_repeats=1,
             )
@@ -140,16 +139,15 @@ for isnr in params['isnr']:
             sure_threshold_list.append(sure_threshold)
 
             #Recherche du dry/wet SURE avec ce sigma pour DEMUCS
-            denoised_sure_demucs,sure_drywet,sure_values_demucs=deepinv_sure_param_search(
+            denoised_sure_demucs, sure_drywet, sure_values_demucs = deepinv_sure_demucs_drywet_search_cached(
                 y_np=noisy_sound,
-                param_values=params['drywet'],
+                drywet_values=params['drywet'],
                 sigma=sigma,
                 fs=samplerate,
-                denoise_func=demucs_denoise,
-                chunk_size=16384,
+                chunk_size=65536,
                 tau=0.01,
                 n_sure_repeats=1,
-                param_name='drywet'
+                param_name="drywet",
             )
 
             #Calcul oSNR DEMUCS
