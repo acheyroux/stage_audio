@@ -1,0 +1,14 @@
+#Paramétrisation du stft/istft (pour information)
+#window=hann
+#nperseg=1024
+#noverlap=768
+#boundaries=zeros
+#padded=True
+#
+#---- vvv Edition possible vvv -----
+isnr=5
+pure_sound_folder=sons
+#Dossier pour placer le son_pur
+path=../../../data/
+export_audio=False
+sigma=0
