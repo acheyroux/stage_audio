@@ -11,12 +11,12 @@ from denoiser.dsp import convert_audio
 
 sys.path.append("../../utils")
 import noise
-from metrics import SNR
+from metrics import SNR,signal_power
 from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_demucs_drywet_search_cached,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search_torch
 
 #Creation du dossier de l'experience
-path="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
-os.mkdir(path)
+epath="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
+os.mkdir(epath)
 
 CSV_export=[]
 
@@ -49,17 +49,20 @@ for full_line in parameters:
 if type(params['isnr'])!=list:
     params['isnr']=[params['isnr']]
 
-params['sigma']=np.logspace(-3,0,30)
-params['drywet']=np.linspace(0,1,10)
+params['sigma']=np.logspace(-3,0,100)
+params['drywet']=np.linspace(0,1,100)
 
 #Import du dossier sonore
 sound_folder='../../../data/'+params['pure_sound_folder']
 sound_files=os.listdir(sound_folder)
 
 sound_files_clean=[]
-for file in sound_files:
-    if file.endswith('.wav'):
-        sound_files_clean.append(file)
+for folder in sorted(sound_files):
+    wav_path = os.path.join(sound_folder, folder, params["sound_type"] + ".wav")
+    if os.path.isfile(wav_path):
+        sound_files_clean.append(os.path.join(folder, params["sound_type"] + ".wav"))
+    if len(sound_files_clean) >= params["track_samples"]:
+        break
 
 #Initialisation des resultats
 all_oSNR={}
@@ -70,7 +73,7 @@ all_sigma_true={}
 
 #Parcours la liste des iSNR de params.txt
 for isnr in params['isnr']:
-
+    sound_number=0
     all_oSNR[isnr]=[]
     all_oSNR_demucs[isnr]=[]
     all_sure_thresholds[isnr]=[]
@@ -79,7 +82,7 @@ for isnr in params['isnr']:
 
     #Parcours les fichiers sonores
     for sound_file in sound_files_clean:
-
+        sound_number+=1
         #Import du fichier sonore
         info=sf.info(sound_folder+'/'+sound_file)
         samplerate=info.samplerate
@@ -94,13 +97,15 @@ for isnr in params['isnr']:
             sound,samplerate=sf.read(sound_folder+'/'+sound_file)
         if len(sound.shape)>1:
             sound=np.mean(sound,axis=1)
-
         sound=convert_audio(torch.from_numpy(sound).float()[None,:],samplerate,16000,1)[0].detach().cpu().numpy()
         samplerate=16000
 
         #Bruitage
         noisy_sound,sigma_true=noise.add_white_noise(sound,samplerate,isnr)
 
+        if sigma_true<10**-2:
+            continue
+        
         #Creation de la liste des seuils a tester dans SURE
         oracle_threshold,figure,thresholds,oSNR_threshold_list=find_oracle_threshold(
             sound,
@@ -187,14 +192,14 @@ for isnr in params['isnr']:
 
         plt.xlabel('Sigma given to SURE')
         plt.ylabel('oSNR')
-        plt.title('oSNR as function of sigma given to SURE - '+sound_file)
+        plt.title('oSNR as function of sigma given to SURE - '+str(sound_number))
         plt.grid(True,which='both')
         plt.legend()
 
-        safe_sound_file=os.path.splitext(sound_file)[0].replace(' ','_')
+        #safe_sound_file=os.path.splitext(sound_file)[0].replace(' ','_')
 
         figure.savefig(
-            path+"/individual_oSNR_sigma_"+safe_sound_file+"_iSNR_"+str(isnr)+".jpg",
+            epath+"/individual_oSNR_sigma_"+str(sound_number)+"_iSNR_"+str(isnr)+".jpg",
             dpi=300,
             bbox_inches="tight"
         )
@@ -354,15 +359,15 @@ for isnr in params['isnr']:
             N
         ])
 
-plt.xlabel('Sigma given to SURE')
-plt.ylabel('Mean oSNR')
-plt.title('Mean oSNR as function of sigma given to SURE - Soustraction Spectrale + DEMUCS')
+plt.xlabel('Sigma estimation for SURE')
+plt.ylabel('oSNR (dB)')
+plt.title('SURE optimal oSNR for various denoising methods')
 plt.grid(True,which='both')
 plt.legend()
-plt.savefig(path+"/mean_oSNR_as_function_of_sigma_sure.jpg",dpi=300,bbox_inches="tight")
+plt.savefig(epath+"/mean_oSNR_as_function_of_sigma_sure.jpg",dpi=300,bbox_inches="tight")
 plt.show()
 
 #Export du CSV du graphe
-with open(path+'/Mean oSNR as function of sigma SURE.csv','w') as csvfile:
+with open(epath+'/Mean oSNR as function of sigma SURE.csv','w') as csvfile:
     writer=csv.writer(csvfile)
     writer.writerows(CSV_export)
