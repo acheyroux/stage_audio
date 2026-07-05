@@ -1,4 +1,23 @@
 # Compte-rendus des meetings
+## Meeting du 06/07/2026 (Modifiée 05/07/2026)
+
+**Fait :**
+- Graphe + code oSNR en focntion de sigma
+- Structure Overleaf
+- Normalisation 0-1 seuillage
+
+**À faire :**
+- 1 Priorité (avant 09/07/2026)
+    - Calculer tous les graphes pour divers iSNR (0,5,10,15)
+    - Placer UNSURE sur les graphes
+    - Rédiger le rapport écrit
+- 2 Priorité (après 09/07/2026)
+    - Nettoyage des scripts
+    - Bruit coloré
+
+**Questions :**
+- Comment interpréter le graphe oSNR (notamment pour DEMUCS vocal)
+
 ## Meeting du 29/06/2026 (Modifiée 28/06/2026)
 
 **Fait :**
