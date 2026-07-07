@@ -2,22 +2,24 @@ name: audio-denoising
 
 channels:
   - pytorch
+  - nvidia
   - conda-forge
 
 dependencies:
-  - python=3.11
-  - pytorch=2.5.1
-  - torchvision=0.20.1
-  - torchaudio=2.5.1
-  - numpy
-  - scipy
-  - matplotlib
-  - jupyter
-  - librosa
-  - pysoundfile
-  - tqdm
-  - pesq
-  - pip
+  - conda-forge::python=3.11
+  - pytorch::pytorch=2.5.1
+  - pytorch::torchvision=0.20.1
+  - pytorch::torchaudio=2.5.1
+  - pytorch::pytorch-cuda=12.4
+  - conda-forge::numpy
+  - conda-forge::scipy
+  - conda-forge::matplotlib
+  - conda-forge::jupyter
+  - conda-forge::librosa
+  - conda-forge::pysoundfile
+  - conda-forge::tqdm
+  - conda-forge::pesq
+  - conda-forge::pip
   - pip:
       - denoiser
       - sgmse
