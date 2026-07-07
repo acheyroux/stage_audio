@@ -14,7 +14,7 @@ if torch.cuda.is_available():
 if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = torch.device("mps")
 
-
+print("Chosen device"+str(device))
 
 
 def signal(x,fs,show=False):
@@ -1040,3 +1040,182 @@ def spectral_sub_torch_thresholds(
     x_all = x_all[:, :, None, None, :]  # [P, B, 1, 1, T]
 
     return x_all
+
+
+
+
+#New DEMUCS
+def np_audio_to_tensor(audio_np: np.ndarray) -> torch.Tensor:
+    """
+    Converts numpy audio to torch tensor shaped [1, channels, samples].
+    Accepts:
+      [samples]
+      [channels, samples]
+      [samples, channels]
+    """
+    audio_np = np.asarray(audio_np, dtype=np.float32)
+
+    if audio_np.ndim == 1:
+        audio_np = audio_np[None, :] # [1, samples]
+
+    elif audio_np.ndim == 2:
+        # If shape is [samples, channels], transpose to [channels, samples]
+        if audio_np.shape[0] > audio_np.shape[1]:
+            audio_np = audio_np.T
+
+    else:
+        raise ValueError("audio_np must be 1D or 2D")
+
+    audio = torch.from_numpy(audio_np).unsqueeze(0) # [1, C, T]
+    return audio.to(device)
+
+
+def tensor_audio_to_np(audio_tensor: torch.Tensor) -> np.ndarray:
+    """
+    Converts [1, channels, samples] tensor back to numpy.
+    """
+    audio = audio_tensor.detach().cpu().squeeze(0).numpy()
+
+    if audio.shape[0] == 1:
+        return audio[0] # mono [samples]
+
+    return audio # stereo/multichannel [channels, samples]
+
+
+def sure_loss(model, noisy_audio, sigma, eps=1e-3):
+    """
+    SURE loss for Gaussian additive noise.
+
+    noisy_audio: torch tensor [B, C, T]
+    sigma: noise standard deviation, not variance
+    """
+
+    clean_estimate = model(noisy_audio)
+
+    # Monte Carlo divergence approximation
+    b = torch.randn_like(noisy_audio)
+
+    clean_estimate_eps = model(noisy_audio + eps * b)
+
+    divergence = torch.sum(
+        b * (clean_estimate_eps - clean_estimate)
+    ) / eps
+
+    residual = torch.sum((clean_estimate - noisy_audio) ** 2)
+
+    n = noisy_audio.numel()
+    sigma2 = sigma ** 2
+
+    loss = residual + 2.0 * sigma2 * divergence - n * sigma2
+
+    return loss / n
+
+class DemucsForDeepInvSURE(nn.Module):
+    def __init__(self, demucs_model):
+        super().__init__()
+        self.demucs_model = demucs_model
+
+    def forward(self, y, physics=None, *args, **kwargs):
+        return self.demucs_model(y)
+
+def demucs_sure_denoise(
+    audio_np: np.ndarray,
+    sigma: float,
+    steps: int = 10,
+    lr: float = 1e-6,
+    eps: float = 1e-3,
+    tau=1e-3,
+    debug=True,
+):
+    """
+    Fine-tunes Demucs on one noisy audio sample using SURE.
+    Every call starts from the pretrained dns64 checkpoint.
+    """
+
+    local_demucs = pretrained.dns64()
+    local_demucs.to(device)
+
+    demucs_model = DemucsForDeepInvSURE(local_demucs).to(device)
+
+    # Keep this if you want the same behavior as before
+    demucs_model.train()
+
+    for param in demucs_model.parameters():
+        param.requires_grad = True
+
+    trainable_params = [p for p in demucs_model.parameters() if p.requires_grad]
+
+    if debug:
+        n_trainable = sum(p.numel() for p in trainable_params)
+        print("Trainable Demucs parameters:", n_trainable)
+
+    noisy_audio = np_audio_to_tensor(audio_np)
+
+    optimizer = torch.optim.Adam(trainable_params, lr=lr)
+
+    physics = dinv.physics.Denoising(
+        noise_model=dinv.physics.GaussianNoise(sigma=float(sigma))
+    )
+
+    sure_loss_fn = dinv.loss.SureGaussianLoss(
+        sigma=float(sigma),
+        tau=float(tau)
+    )
+
+    with torch.no_grad():
+        output_before = demucs_model(noisy_audio).detach().clone()
+
+    for step in range(steps):
+        optimizer.zero_grad()
+
+        x_net = demucs_model(noisy_audio)
+
+        loss = sure_loss_fn(
+            x_net=x_net,
+            y=noisy_audio,
+            physics=physics,
+            model=demucs_model,
+        )
+
+        loss.backward()
+
+        if debug:
+            grad_norm_sq = 0.0
+            param_norm_sq = 0.0
+
+            for p in trainable_params:
+                param_norm_sq += p.detach().pow(2).sum().item()
+
+                if p.grad is not None:
+                    grad_norm_sq += p.grad.detach().pow(2).sum().item()
+
+            grad_norm = grad_norm_sq ** 0.5
+            param_norm = param_norm_sq ** 0.5
+
+            print(
+                f"step {step:03d} | "
+                f"SURE={loss.item():.6e} | "
+                f"grad_norm={grad_norm:.6e} | "
+                f"param_norm={param_norm:.6e}"
+            )
+
+        optimizer.step()
+
+    demucs_model.eval()
+
+    with torch.no_grad():
+        output_after = demucs_model(noisy_audio)
+
+        if debug:
+            output_change = torch.mean((output_after - output_before) ** 2).item()
+            input_distance_before = torch.mean((output_before - noisy_audio) ** 2).item()
+            input_distance_after = torch.mean((output_after - noisy_audio) ** 2).item()
+
+            print("MSE output_after - output_before:", output_change)
+            print("MSE checkpoint_output - noisy:", input_distance_before)
+            print("MSE finetuned_output - noisy:", input_distance_after)
+
+    denoised_np = tensor_audio_to_np(output_after)
+    denoised_np = denoised_np[:len(audio_np)]
+
+    return denoised_np

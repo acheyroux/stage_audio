@@ -12,7 +12,7 @@ from denoiser.dsp import convert_audio
 sys.path.append("../../utils")
 import noise
 from metrics import SNR,signal_power
-from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_demucs_drywet_search_cached,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search_torch
+from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_demucs_drywet_search_cached,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search_torch, demucs_sure_denoise
 
 #Creation du dossier de l'experience
 epath="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
@@ -49,7 +49,7 @@ for full_line in parameters:
 if type(params['isnr'])!=list:
     params['isnr']=[params['isnr']]
 
-params['sigma']=np.logspace(-3,0,100)
+params['sigma']=np.logspace(-3,0,5)
 params['drywet']=np.linspace(0,1,100)
 
 #Import du dossier sonore
@@ -68,7 +68,6 @@ for folder in sorted(sound_files):
 all_oSNR={}
 all_oSNR_demucs={}
 all_sure_thresholds={}
-all_sure_drywet={}
 all_sigma_true={}
 
 #Parcours la liste des iSNR de params.txt
@@ -77,7 +76,6 @@ for isnr in params['isnr']:
     all_oSNR[isnr]=[]
     all_oSNR_demucs[isnr]=[]
     all_sure_thresholds[isnr]=[]
-    all_sure_drywet[isnr]=[]
     all_sigma_true[isnr]=[]
 
     #Parcours les fichiers sonores
@@ -120,7 +118,6 @@ for isnr in params['isnr']:
         oSNR_sigma_list=[]
         oSNR_sigma_list_demucs=[]
         sure_threshold_list=[]
-        sure_drywet_list=[]
 
         #Parcours des sigma donnes a SURE
         for sigma in params['sigma']:
@@ -144,22 +141,14 @@ for isnr in params['isnr']:
             sure_threshold_list.append(sure_threshold)
 
             #Recherche du dry/wet SURE avec ce sigma pour DEMUCS
-            denoised_sure_demucs, sure_drywet, sure_values_demucs = deepinv_sure_demucs_drywet_search_cached(
-                y_np=noisy_sound,
-                drywet_values=params['drywet'],
-                sigma=sigma,
-                fs=samplerate,
-                chunk_size=65536,
-                tau=0.01,
-                n_sure_repeats=1,
-                param_name="drywet",
+            denoised_sure_demucs = demucs_sure_denoise(
+                noisy_sound,sigma,50,1e-5
             )
 
             #Calcul oSNR DEMUCS
             osnr_demucs=SNR(sound,denoised_sure_demucs)
 
             oSNR_sigma_list_demucs.append(osnr_demucs)
-            sure_drywet_list.append(sure_drywet)
 
         #Graphe individuel oSNR en fonction de sigma
         sigma_array=np.array(params['sigma'])
@@ -209,7 +198,6 @@ for isnr in params['isnr']:
         all_oSNR[isnr].append(oSNR_sigma_list)
         all_oSNR_demucs[isnr].append(oSNR_sigma_list_demucs)
         all_sure_thresholds[isnr].append(sure_threshold_list)
-        all_sure_drywet[isnr].append(sure_drywet_list)
         all_sigma_true[isnr].append(sigma_true)
 
 #Nombre d'extraits
@@ -245,7 +233,6 @@ for isnr in params['isnr']:
     oSNR_array=np.array(all_oSNR[isnr])
     oSNR_array_demucs=np.array(all_oSNR_demucs[isnr])
     sure_thresholds_array=np.array(all_sure_thresholds[isnr])
-    sure_drywet_array=np.array(all_sure_drywet[isnr])
     sigma_true_array=np.array(all_sigma_true[isnr])
     sigma_array=np.array(params['sigma'])
 
@@ -276,14 +263,7 @@ for isnr in params['isnr']:
 
     sure_uncertainty=std_sure_threshold/np.sqrt(N)
 
-    mean_sure_drywet=np.mean(sure_drywet_array,axis=0)
 
-    if N>1:
-        std_sure_drywet=np.std(sure_drywet_array,axis=0,ddof=1)
-    else:
-        std_sure_drywet=np.zeros(len(mean_sure_drywet))
-
-    sure_drywet_uncertainty=std_sure_drywet/np.sqrt(N)
 
     mean_sigma_true=np.mean(sigma_true_array)
 
@@ -350,9 +330,6 @@ for isnr in params['isnr']:
             mean_oSNR_demucs[i],
             std_oSNR_demucs[i],
             uncertainty_demucs[i],
-            mean_sure_drywet[i],
-            std_sure_drywet[i],
-            sure_drywet_uncertainty[i],
             mean_sigma_true,
             std_sigma_true,
             sigma_true_uncertainty,
