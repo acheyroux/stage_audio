@@ -12,6 +12,6 @@ pure_sound_folder=musdb18hq/train
 path=../../../data/
 export_audio=False
 sigma=0
-track_samples=5
+track_samples=20
 #sound type mixture/vocals
 sound_type=mixture

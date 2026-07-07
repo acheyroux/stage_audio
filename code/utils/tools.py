@@ -1121,23 +1121,26 @@ class DemucsForDeepInvSURE(nn.Module):
 def demucs_sure_denoise(
     audio_np: np.ndarray,
     sigma: float,
-    steps: int = 10,
+    steps: int = 100,
     lr: float = 1e-6,
     eps: float = 1e-3,
     tau=1e-3,
-    debug=True,
+    mc_batch_size: int = 4,
+    debug=False,
 ):
     """
     Fine-tunes Demucs on one noisy audio sample using SURE.
-    Every call starts from the pretrained dns64 checkpoint.
+
+    Each call:
+        - starts from a fresh pretrained dns64 checkpoint
+        - uses the full audio, not crops
+        - batches multiple Monte Carlo SURE perturbations at once
     """
 
     local_demucs = pretrained.dns64()
     local_demucs.to(device)
 
     demucs_model = DemucsForDeepInvSURE(local_demucs).to(device)
-
-    # Keep this if you want the same behavior as before
     demucs_model.train()
 
     for param in demucs_model.parameters():
@@ -1149,7 +1152,11 @@ def demucs_sure_denoise(
         n_trainable = sum(p.numel() for p in trainable_params)
         print("Trainable Demucs parameters:", n_trainable)
 
-    noisy_audio = np_audio_to_tensor(audio_np)
+    noisy_audio = np_audio_to_tensor(audio_np)  # [1, C, T]
+
+    # Full-audio batch: same full signal repeated several times.
+    # No cropping.
+    noisy_batch = noisy_audio.repeat(mc_batch_size, 1, 1)  # [B, C, T]
 
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
 
@@ -1162,44 +1169,36 @@ def demucs_sure_denoise(
         tau=float(tau)
     )
 
-    with torch.no_grad():
-        output_before = demucs_model(noisy_audio).detach().clone()
+    if debug:
+        with torch.no_grad():
+            output_before = demucs_model(noisy_audio).detach().clone()
 
     for step in range(steps):
-        optimizer.zero_grad()
-
-        x_net = demucs_model(noisy_audio)
-
-        loss = sure_loss_fn(
+        optimizer.zero_grad(set_to_none=True)
+    
+        x_net = demucs_model(noisy_batch)
+    
+        loss_per_item = sure_loss_fn(
             x_net=x_net,
-            y=noisy_audio,
+            y=noisy_batch,
             physics=physics,
             model=demucs_model,
         )
-
+    
+        loss = loss_per_item.mean()
+    
         loss.backward()
+        optimizer.step()
+    
+        print(
+            f"Demucs SURE step {step + 1}/{steps} | "
+            f"mean={loss.item():.6e} | "
+            f"min={loss_per_item.min().item():.6e} | "
+            f"max={loss_per_item.max().item():.6e}"
+        )
 
         if debug:
-            grad_norm_sq = 0.0
-            param_norm_sq = 0.0
-
-            for p in trainable_params:
-                param_norm_sq += p.detach().pow(2).sum().item()
-
-                if p.grad is not None:
-                    grad_norm_sq += p.grad.detach().pow(2).sum().item()
-
-            grad_norm = grad_norm_sq ** 0.5
-            param_norm = param_norm_sq ** 0.5
-
-            print(
-                f"step {step:03d} | "
-                f"SURE={loss.item():.6e} | "
-                f"grad_norm={grad_norm:.6e} | "
-                f"param_norm={param_norm:.6e}"
-            )
-
-        optimizer.step()
+            print(f"step {step:03d} | SURE={loss.item():.6e}")
 
     demucs_model.eval()
 

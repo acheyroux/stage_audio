@@ -49,7 +49,7 @@ for full_line in parameters:
 if type(params['isnr'])!=list:
     params['isnr']=[params['isnr']]
 
-params['sigma']=np.logspace(-3,0,5)
+params['sigma']=np.logspace(-3,0,50)
 params['drywet']=np.linspace(0,1,100)
 
 #Import du dossier sonore
@@ -142,7 +142,13 @@ for isnr in params['isnr']:
 
             #Recherche du dry/wet SURE avec ce sigma pour DEMUCS
             denoised_sure_demucs = demucs_sure_denoise(
-                noisy_sound,sigma,50,1e-5
+                noisy_sound,
+                sigma,
+                steps=7,
+                lr=3e-4,
+                tau=1e-3,
+                mc_batch_size=5,
+                debug=False,
             )
 
             #Calcul oSNR DEMUCS
