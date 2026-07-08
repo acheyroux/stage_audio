@@ -25,6 +25,8 @@ from tools import (
     deepinv_sure_spectral_sub_threshold_search_torch,
     demucs_sure_denoise,
     sgmse_sure_denoise,
+    estimate_sigma_unsure_audio,
+    robust_sigma_init_from_differences,
 )
 
 #Creation du dossier de l'experience
@@ -261,15 +263,53 @@ for isnr in params['isnr']:
             )
             
             denoised_sure_sgmse = denoised_sure_sgmse[:len(sound_sgmse)]
-            
-            osnr_sgmse = SNR(
-                sound_sgmse,
-                denoised_sure_sgmse,
-            )
 
-            if not np.isfinite(osnr_sgmse):
-                print("WARNING: SGMSE oSNR is NaN/inf, replacing with noisy baseline")
-                osnr_sgmse = SNR(sound_sgmse, noisy_sound_sgmse)
+            if sigma<=2e-1:
+                drywets=np.linspace(0,1,10)
+
+                best_drywet_sgmse=0
+                best_osnr_sgmse=-np.inf
+
+                for drywet_sgmse in drywets:
+                    denoised_sgmse_drywet=drywet_sgmse*denoised_sure_sgmse+(1.0-drywet_sgmse)*noisy_sound_sgmse
+
+                    osnr_sgmse_test=SNR(
+                        sound_sgmse,
+                        denoised_sgmse_drywet,
+                    )
+
+                    if np.isfinite(osnr_sgmse_test) and osnr_sgmse_test>best_osnr_sgmse:
+                        best_osnr_sgmse=osnr_sgmse_test
+                        best_drywet_sgmse=drywet_sgmse
+
+                if not np.isfinite(best_osnr_sgmse):
+                    print("WARNING: SGMSE oSNR is NaN/inf, replacing with noisy baseline")
+                    best_drywet_sgmse=0
+                    best_osnr_sgmse=SNR(sound_sgmse,noisy_sound_sgmse)
+
+                osnr_sgmse=best_osnr_sgmse
+
+                print(
+                    f"SGMSE best drywet={best_drywet_sgmse:.3f} | "
+                    f"oSNR={osnr_sgmse:.3f} dB"
+                )
+
+            else:
+                osnr_sgmse=SNR(
+                    sound_sgmse,
+                    denoised_sure_sgmse,
+                )
+
+                if not np.isfinite(osnr_sgmse):
+                    print("WARNING: SGMSE oSNR is NaN/inf, replacing with 0 dB")
+                    osnr_sgmse=0
+
+                osnr_sgmse=max(osnr_sgmse,0)
+
+                print(
+                    f"SGMSE no drywet | "
+                    f"oSNR={osnr_sgmse:.3f} dB"
+                )
             
 
 

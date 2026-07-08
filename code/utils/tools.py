@@ -1653,3 +1653,244 @@ def sgmse_sure_denoise(
         torch.cuda.empty_cache()
 
     return denoised_np
+
+
+#UNSURE
+class AudioUnsureDenoiser(nn.Module):
+    """
+    Small trainable 1D denoiser used only for UNSURE sigma estimation.
+
+    DeepInv SURE code usually uses image-like tensors [B, C, H, W].
+    For mono audio, we use [B, 1, 1, T], squeeze H=1, apply Conv1d,
+    then restore [B, 1, 1, T].
+    """
+
+    def __init__(self, hidden_channels=32, kernel_size=15):
+        super().__init__()
+
+        padding = kernel_size // 2
+
+        self.net = nn.Sequential(
+            nn.Conv1d(1, hidden_channels, kernel_size, padding=padding),
+            nn.ReLU(),
+            nn.Conv1d(hidden_channels, hidden_channels, kernel_size, padding=padding),
+            nn.ReLU(),
+            nn.Conv1d(hidden_channels, hidden_channels, kernel_size, padding=padding),
+            nn.ReLU(),
+            nn.Conv1d(hidden_channels, 1, kernel_size, padding=padding),
+        )
+
+    def forward(self, y, *args, **kwargs):
+        if y.ndim == 4:
+            # [B, 1, 1, T] -> [B, 1, T]
+            y_1d = y[:, :, 0, :]
+            x_1d = self.net(y_1d)
+            # [B, 1, T] -> [B, 1, 1, T]
+            return x_1d[:, :, None, :]
+
+        if y.ndim == 3:
+            # [B, 1, T]
+            return self.net(y)
+
+        raise ValueError("AudioUnsureDenoiser expects [B,1,T] or [B,1,1,T].")
+
+
+def robust_sigma_init_from_differences(noisy_sound):
+    """
+    Robust initialization of AWGN sigma from first differences.
+
+    This is not the final estimate. It only initializes UNSURE.
+    For white noise n, diff(n) has std sqrt(2) * sigma.
+    """
+
+    y = np.asarray(noisy_sound, dtype=np.float32).squeeze()
+
+    if y.ndim != 1:
+        raise ValueError("noisy_sound must be a mono 1D signal.")
+
+    if y.size < 2:
+        return 1e-2
+
+    diff = np.diff(y)
+    mad = np.median(np.abs(diff - np.median(diff)))
+
+    sigma_init = mad / (0.67448975 * np.sqrt(2.0))
+
+    if not np.isfinite(sigma_init) or sigma_init <= 0:
+        sigma_init = 1e-2
+
+    return float(np.clip(sigma_init, 1e-6, 1.0))
+
+
+def sample_audio_unsure_patches(y, batch_size, patch_size):
+    """
+    Random patch sampler for one audio signal.
+
+    Parameters
+    ----------
+    y:
+        Tensor with shape [1, 1, 1, T]
+    batch_size:
+        Number of random patches.
+    patch_size:
+        Patch length in samples.
+
+    Returns
+    -------
+    patches:
+        Tensor with shape [batch_size, 1, 1, patch_size]
+    """
+
+    length = y.shape[-1]
+    patch_size = min(int(patch_size), int(length))
+
+    if length == patch_size:
+        return y.repeat(batch_size, 1, 1, 1)
+
+    starts = torch.randint(
+        low=0,
+        high=length - patch_size + 1,
+        size=(batch_size,),
+        device=y.device,
+    )
+
+    patches = []
+    for start in starts:
+        start = int(start.item())
+        patches.append(y[:, :, :, start:start + patch_size])
+
+    return torch.cat(patches, dim=0)
+
+
+def estimate_sigma_unsure_audio(
+    noisy_sound,
+    sigma_init=None,
+    steps=150,
+    batch_size=8,
+    patch_size=8192,
+    lr=1e-3,
+    tau=1e-3,
+    unsure_step_size=1e-4,
+    unsure_momentum=0.9,
+    hidden_channels=32,
+    kernel_size=15,
+    device=None,
+    verbose=False,
+):
+    """
+    Estimate scalar white Gaussian noise sigma from one noisy mono audio extract
+    using DeepInv's UNSURE version of SureGaussianLoss.
+
+    Parameters
+    ----------
+    noisy_sound:
+        1D NumPy array.
+    sigma_init:
+        Initial sigma. If None, uses robust_sigma_init_from_differences.
+    steps:
+        Number of UNSURE optimization steps.
+    batch_size:
+        Number of random patches per step.
+    patch_size:
+        Patch size in audio samples.
+    lr:
+        Adam learning rate for the small denoiser.
+    tau:
+        Monte Carlo SURE perturbation size.
+    unsure_step_size:
+        Gradient-ascent step size for the UNSURE noise level.
+    unsure_momentum:
+        Momentum for the UNSURE noise-level update.
+    hidden_channels:
+        Width of the small Conv1d denoiser.
+    kernel_size:
+        Kernel size of the Conv1d denoiser.
+    device:
+        Optional torch device.
+    verbose:
+        If True, prints progress.
+
+    Returns
+    -------
+    sigma_hat:
+        Estimated sigma in the same amplitude scale as noisy_sound.
+    """
+
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    else:
+        device = torch.device(device)
+
+    y_np = np.asarray(noisy_sound, dtype=np.float32).squeeze()
+
+    if y_np.ndim != 1:
+        raise ValueError("noisy_sound must be a mono 1D NumPy array.")
+
+    if sigma_init is None:
+        sigma_init = robust_sigma_init_from_differences(y_np)
+
+    sigma_init = float(sigma_init)
+
+    if not np.isfinite(sigma_init) or sigma_init <= 0:
+        sigma_init = 1e-2
+
+    y = torch.from_numpy(y_np).float().view(1, 1, 1, -1).to(device)
+
+    physics = dinv.physics.Denoising()
+
+    model = AudioUnsureDenoiser(
+        hidden_channels=hidden_channels,
+        kernel_size=kernel_size,
+    ).to(device)
+
+    unsure_loss = dinv.loss.SureGaussianLoss(
+        sigma=sigma_init,
+        tau=float(tau),
+        unsure=True,
+        step_size=float(unsure_step_size),
+        momentum=float(unsure_momentum),
+    )
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=float(lr))
+
+    model.train()
+
+    for step in range(int(steps)):
+        y_batch = sample_audio_unsure_patches(
+            y,
+            batch_size=int(batch_size),
+            patch_size=int(patch_size),
+        )
+
+        optimizer.zero_grad(set_to_none=True)
+
+        x_net = model(y_batch)
+
+        loss = unsure_loss(
+            y=y_batch,
+            x_net=x_net,
+            physics=physics,
+            model=model,
+        ).mean()
+
+        loss.backward()
+        optimizer.step()
+
+        if verbose and (step % 25 == 0 or step == steps - 1):
+            sigma_now = torch.sqrt(unsure_loss.sigma2.detach().clamp_min(0.0)).item()
+            print(
+                f"UNSURE step {step + 1}/{steps} | "
+                f"loss={loss.item():.4e} | sigma={sigma_now:.4e}"
+            )
+
+    sigma_hat = torch.sqrt(unsure_loss.sigma2.detach().clamp_min(0.0)).item()
+
+    if not np.isfinite(sigma_hat) or sigma_hat <= 0:
+        sigma_hat = sigma_init
+
+    return float(sigma_hat)
