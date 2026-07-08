@@ -6,6 +6,14 @@ from metrics import SNR
 import torch
 from denoiser import pretrained
 from denoiser.dsp import convert_audio
+import os
+import gc
+
+import sgmse
+from sgmse.model import ScoreModel
+from sgmse.util.other import pad_spec
+from sgmse.sampling import PredictorRegistry, CorrectorRegistry
+
 
 #Recherche GPU/CPU
 device = torch.device("cpu")
@@ -1216,5 +1224,432 @@ def demucs_sure_denoise(
 
     denoised_np = tensor_audio_to_np(output_after)
     denoised_np = denoised_np[:len(audio_np)]
+
+    del output_after
+    del noisy_audio
+    del noisy_batch
+    del optimizer
+    del physics
+    del sure_loss_fn
+    del demucs_model
+    del local_demucs
+    del trainable_params
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    
+    return denoised_np
+
+#SGMSE
+SGMSE_CKPT_PATH="../../../data/sgmse_voicebank.ckpt"
+if not os.path.isfile(SGMSE_CKPT_PATH): import gdown; os.makedirs(os.path.dirname(SGMSE_CKPT_PATH),exist_ok=True); gdown.download(id="1_H3EXvhcYBhOZ9QNUcD5VZHc6ktrRbwQ", output=SGMSE_CKPT_PATH, quiet=False)
+
+class SGMSEWaveformDenoiserForSURE(torch.nn.Module):
+    def __init__(
+        self,
+        checkpoint_path,
+        N=2,
+        predictor="reverse_diffusion",
+        corrector="ald",
+        corrector_steps=1,
+        snr=0.5,
+        t_eps=0.03,
+        sampler_seed=1234,
+    ):
+        super().__init__()
+
+        self.score_model = ScoreModel.load_from_checkpoint(
+            checkpoint_path,
+            map_location=device,
+        )
+
+        self.score_model.to(device)
+
+        # SGMSE has a custom eval/train behavior with EMA weights.
+        # Calling eval() once here copies EMA weights into the DNN.
+        # After this, do NOT call score_model.train(), because that can restore
+        # the non-EMA weights.
+        self.score_model.eval()
+
+        self.score_model.t_eps = float(t_eps)
+
+        self.N = int(N)
+        self.predictor = predictor
+        self.corrector = corrector
+        self.corrector_steps = int(corrector_steps)
+        self.snr = float(snr)
+        self.t_eps = float(t_eps)
+        self.sampler_seed = sampler_seed
+
+        if self.score_model.backbone == "ncsnpp_48k":
+            self.target_sr = 48000
+            self.pad_mode = "reflection"
+        elif self.score_model.backbone == "ncsnpp_v2":
+            self.target_sr = 16000
+            self.pad_mode = "reflection"
+        else:
+            self.target_sr = 16000
+            self.pad_mode = "zero_pad"
+
+        if self.score_model.sde.__class__.__name__ != "OUVESDE":
+            raise ValueError(
+                "This SGMSE SURE wrapper currently supports OUVESDE checkpoints only. "
+                f"Got {self.score_model.sde.__class__.__name__}."
+            )
+
+    def _prepare_spec(self, y_wave):
+        """
+        Convert waveform to the SGMSE complex spectrogram condition.
+
+        Input
+        -----
+        y_wave:
+            [B, 1, T]
+
+        Output
+        ------
+        Y:
+            SGMSE spectrogram condition, padded.
+        norm_factors:
+            [B, 1, 1]
+        T:
+            original waveform length
+        """
+
+        B, C, T = y_wave.shape
+
+        if C != 1:
+            raise ValueError("SGMSE SURE expects mono audio with shape [B, 1, T].")
+
+        specs = []
+        norm_factors = []
+
+        for b in range(B):
+            y_b = y_wave[b]  # [1, T]
+
+            norm = y_b.abs().max().clamp_min(1e-8)
+            y_b_norm = y_b / norm
+
+            Y_b = self.score_model._forward_transform(
+                self.score_model._stft(y_b_norm)
+            )
+
+            Y_b = torch.unsqueeze(Y_b, 0)
+            Y_b = pad_spec(Y_b, mode=self.pad_mode)
+
+            specs.append(Y_b)
+            norm_factors.append(norm)
+
+        Y = torch.cat(specs, dim=0)
+        norm_factors = torch.stack(norm_factors).view(B, 1, 1)
+
+        return Y, norm_factors, T
+
+    def _differentiable_pc_sampler(self, Y):
+        """
+        Differentiable version of SGMSE PC sampling.
+
+        The official SGMSE get_pc_sampler() uses torch.no_grad().
+        For SURE, we cannot use no_grad here because DeepInv needs gradients.
+        """
+
+        sde = self.score_model.sde.copy()
+        sde.N = self.N
+
+        predictor_cls = PredictorRegistry.get_by_name(self.predictor)
+        corrector_cls = CorrectorRegistry.get_by_name(self.corrector)
+
+        predictor = predictor_cls(
+            sde,
+            self.score_model,
+            probability_flow=False,
+        )
+
+        corrector = corrector_cls(
+            sde,
+            self.score_model,
+            snr=self.snr,
+            n_steps=self.corrector_steps,
+        )
+
+        # Make the stochastic sampler deterministic for a given forward call.
+        # This is important because DeepInv SURE compares f(y) and f(y + tau*b).
+        if self.sampler_seed is not None:
+            torch.manual_seed(int(self.sampler_seed))
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(int(self.sampler_seed))
+
+        xt = sde.prior_sampling(Y.shape, Y).to(Y.device)
+
+        timesteps = torch.linspace(
+            sde.T,
+            self.t_eps,
+            sde.N,
+            device=Y.device,
+        )
+
+        for i in range(sde.N):
+            t = timesteps[i]
+
+            if i != len(timesteps) - 1:
+                stepsize = t - timesteps[i + 1]
+            else:
+                stepsize = timesteps[-1]
+
+            vec_t = torch.ones(Y.shape[0], device=Y.device) * t
+
+            xt, xt_mean = corrector.update_fn(
+                xt,
+                Y,
+                vec_t,
+            )
+
+            xt, xt_mean = predictor.update_fn(
+                xt,
+                Y,
+                vec_t,
+                stepsize,
+            )
+
+        return xt_mean
+
+    def forward(self, y, physics=None, *args, **kwargs):
+        """
+        DeepInv-compatible forward.
+
+        Input:
+            y: [B, 1, T]
+
+        Output:
+            x_hat: [B, 1, T]
+        """
+
+        Y, norm_factors, T_orig = self._prepare_spec(y)
+
+        sample = self._differentiable_pc_sampler(Y)
+
+        outputs = []
+
+        for b in range(y.shape[0]):
+            x_hat_b = self.score_model.to_audio(
+                sample[b].squeeze(),
+                T_orig,
+            )
+
+            x_hat_b = x_hat_b * norm_factors[b].squeeze()
+            x_hat_b = x_hat_b.view(1, -1)
+
+            outputs.append(x_hat_b)
+
+        x_hat = torch.stack(outputs, dim=0)
+
+        return x_hat
+
+
+def sgmse_sure_denoise(
+    audio_np: np.ndarray,
+    sigma: float,
+    checkpoint_path: str,
+    fs: int | None = None,
+    steps: int = 1,
+    lr: float = 1e-5,
+    tau: float = 1e-3,
+    mc_batch_size: int = 1,
+    sgmse_N: int = 2,
+    corrector: str = "ald",
+    corrector_steps: int = 1,
+    snr: float = 0.5,
+    t_eps: float = 0.03,
+    grad_clip: float = 1.0,
+    debug: bool = False,
+):
+    """
+    SGMSE + SURE fine-tuning.
+
+    Each call:
+        - loads a fresh SGMSE checkpoint
+        - uses the full noisy audio
+        - fine-tunes SGMSE with DeepInv SURE
+        - returns a NumPy waveform
+
+    Recommended first settings:
+        steps=1
+        sgmse_N=2
+        mc_batch_size=1
+        lr=1e-5
+
+    Do not start with SGMSE N=30 here.
+    Backpropagating through diffusion sampling is very expensive.
+    """
+
+    sgmse_model = SGMSEWaveformDenoiserForSURE(
+        checkpoint_path=checkpoint_path,
+        N=sgmse_N,
+        predictor="reverse_diffusion",
+        corrector=corrector,
+        corrector_steps=corrector_steps,
+        snr=snr,
+        t_eps=t_eps,
+        sampler_seed=1234,
+    ).to(device)
+
+    # Optional sample-rate sanity check.
+    # Your current experiment already resamples to 16 kHz before denoising.
+    if fs is not None:
+        fs = int(fs)
+        if fs != int(sgmse_model.target_sr):
+            raise ValueError(
+                f"SGMSE checkpoint expects {sgmse_model.target_sr} Hz, "
+                f"but received fs={fs}. Resample before calling sgmse_sure_denoise."
+            )
+
+    # Do NOT call sgmse_model.train().
+    # Do NOT call sgmse_model.score_model.train().
+    # SGMSE train/eval controls EMA restoration/copying.
+    for param in sgmse_model.parameters():
+        param.requires_grad = True
+
+    trainable_params = [
+        p for p in sgmse_model.parameters()
+        if p.requires_grad
+    ]
+
+    if debug:
+        n_trainable = sum(p.numel() for p in trainable_params)
+        print("Trainable SGMSE parameters:", n_trainable)
+        print("SGMSE target_sr:", sgmse_model.target_sr)
+        print("SGMSE pad_mode:", sgmse_model.pad_mode)
+
+    noisy_audio = np_audio_to_tensor(audio_np)  # [1, 1, T]
+
+    if noisy_audio.shape[1] != 1:
+        raise ValueError("SGMSE SURE currently expects mono audio.")
+
+    noisy_batch = noisy_audio.repeat(mc_batch_size, 1, 1)
+
+    physics = dinv.physics.Denoising(
+        noise_model=dinv.physics.GaussianNoise(
+            sigma=float(sigma)
+        )
+    )
+
+    sure_loss_fn = dinv.loss.SureGaussianLoss(
+        sigma=float(sigma),
+        tau=float(tau),
+    )
+
+    # More conservative than Demucs.
+    effective_lr = float(lr) / (1.0 + 10.0 * float(sigma) ** 2)
+
+    optimizer = torch.optim.Adam(
+        trainable_params,
+        lr=effective_lr,
+    )
+
+    best_loss = float("inf")
+    best_state = None
+    previous_sure = None
+
+    for step in range(steps):
+        optimizer.zero_grad(set_to_none=True)
+
+        x_net = sgmse_model(noisy_batch)
+
+        loss_per_item = sure_loss_fn(
+            x_net=x_net,
+            y=noisy_batch,
+            physics=physics,
+            model=sgmse_model,
+        )
+
+        loss = loss_per_item.mean()
+
+        loss.backward()
+
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                trainable_params,
+                max_norm=float(grad_clip),
+            )
+
+        optimizer.step()
+
+        current_sure = float(loss.detach().cpu())
+        if current_sure < 1e-1:
+            for group in optimizer.param_groups:
+                group["lr"] = effective_lr * 0.7
+                
+        if current_sure < 1e-2:
+            for group in optimizer.param_groups:
+                group["lr"] = effective_lr * 0.23
+
+        if current_sure < 6e-3:
+            for group in optimizer.param_groups:
+                group["lr"] = effective_lr * 0.04
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        
+        print(
+            f"SGMSE SURE step {step + 1}/{steps} | "
+            f"sigma={sigma:.3e} | "
+            f"lr={current_lr:.3e} | "
+            f"SURE={current_sure:.6e} | "
+            f"min={loss_per_item.min().item():.6e} | "
+            f"max={loss_per_item.max().item():.6e}"
+        )
+
+        if np.isfinite(current_sure) and current_sure < best_loss:
+            best_loss = current_sure
+            best_state = {
+                k: v.detach().cpu().clone()
+                for k, v in sgmse_model.state_dict().items()
+            }
+
+        if not np.isfinite(current_sure):
+            print("Stopping SGMSE SURE: SURE became NaN/inf")
+            break
+
+        if previous_sure is not None and current_sure > 5.0 * previous_sure:
+            print("Stopping SGMSE SURE: SURE exploded")
+            break
+
+        previous_sure = current_sure
+        del x_net
+        del loss
+        del loss_per_item
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    if best_state is not None:
+        sgmse_model.load_state_dict(best_state)
+
+    # Important:
+    # Do NOT call sgmse_model.eval() here.
+    # The wrapped ScoreModel has custom EMA train/eval behavior.
+    # We already copied EMA once during initialization.
+
+    with torch.no_grad():
+        output_after = sgmse_model(noisy_audio)
+
+    denoised_np = tensor_audio_to_np(output_after)
+    denoised_np = denoised_np[:len(audio_np)]
+
+    del output_after
+    del noisy_audio
+    del noisy_batch
+    del optimizer
+    del physics
+    del sure_loss_fn
+    del sgmse_model
+    del trainable_params
+
+    if best_state is not None:
+        del best_state
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return denoised_np

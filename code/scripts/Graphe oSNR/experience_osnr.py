@@ -14,6 +14,19 @@ import noise
 from metrics import SNR,signal_power
 from tools import find_oracle_threshold,denoise_spectral_sub,demucs_denoise,deepinv_sure_param_search,SpectralSubNumpyWrapper,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_demucs_drywet_search_cached,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search,deepinv_sure_spectral_sub_threshold_search_torch, demucs_sure_denoise
 
+from tools import (
+    find_oracle_threshold,
+    denoise_spectral_sub,
+    demucs_denoise,
+    deepinv_sure_param_search,
+    SpectralSubNumpyWrapper,
+    deepinv_sure_spectral_sub_threshold_search,
+    deepinv_sure_demucs_drywet_search_cached,
+    deepinv_sure_spectral_sub_threshold_search_torch,
+    demucs_sure_denoise,
+    sgmse_sure_denoise,
+)
+
 #Creation du dossier de l'experience
 epath="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
 os.mkdir(epath)
@@ -49,8 +62,62 @@ for full_line in parameters:
 if type(params['isnr'])!=list:
     params['isnr']=[params['isnr']]
 
-params['sigma']=np.logspace(-3,0,50)
+
+
+
+
+def clustered_logspace(N, low=1e-3, high=1.0,
+                       band=(5e-2, 2e-1),
+                       frac_in_band=0.5):
+    """
+    Log-spaced points from low to high, with roughly frac_in_band
+    of points between band[0] and band[1].
+    """
+    if N < 3:
+        return np.logspace(np.log10(low), np.log10(high), N)
+
+    b0, b1 = band
+
+    n_mid = int(round(frac_in_band * N))
+    n_side = N - n_mid
+    n_low = n_side // 2
+    n_high = n_side - n_low
+
+    parts = []
+
+    if n_low > 0:
+        parts.append(np.logspace(np.log10(low), np.log10(b0), n_low, endpoint=False))
+
+    # Split the dense region around 1e-1
+    n_mid_left = n_mid // 2
+    n_mid_right = n_mid - n_mid_left
+
+    parts.append(np.logspace(np.log10(b0), np.log10(1e-1), n_mid_left, endpoint=False))
+    parts.append(np.logspace(np.log10(1e-1), np.log10(b1), n_mid_right, endpoint=False))
+
+    if n_high > 0:
+        parts.append(np.logspace(np.log10(b1), np.log10(high), n_high))
+
+    return np.concatenate(parts)
+
+
+params['sigma']=clustered_logspace(20)#np.logspace(-3,0,5)
 params['drywet']=np.linspace(0,1,100)
+
+
+#SGMSE
+params["sgmse_checkpoint"] = "../../../data/sgmse_voicebank.ckpt"
+params["sgmse_sure_steps"] = 100
+params["sgmse_sure_lr"] = 1e-4
+params["sgmse_sure_N"] = 1
+params["sgmse_sure_mc_batch_size"] = 1
+params["sgmse_sure_tau"] = 1e-3
+params["sgmse_snr"] = 0.5
+params["sgmse_corrector"] = "ald"
+params["sgmse_corrector_steps"] = 1
+params["sgmse_t_eps"] = 0.03
+#
+
 
 #Import du dossier sonore
 sound_folder='../../../data/'+params['pure_sound_folder']
@@ -67,6 +134,7 @@ for folder in sorted(sound_files):
 #Initialisation des resultats
 all_oSNR={}
 all_oSNR_demucs={}
+all_oSNR_sgmse={}
 all_sure_thresholds={}
 all_sigma_true={}
 
@@ -75,6 +143,7 @@ for isnr in params['isnr']:
     sound_number=0
     all_oSNR[isnr]=[]
     all_oSNR_demucs[isnr]=[]
+    all_oSNR_sgmse[isnr]=[]
     all_sure_thresholds[isnr]=[]
     all_sigma_true[isnr]=[]
 
@@ -118,6 +187,7 @@ for isnr in params['isnr']:
         oSNR_sigma_list=[]
         oSNR_sigma_list_demucs=[]
         sure_threshold_list=[]
+        oSNR_sigma_list_sgmse=[]
 
         #Parcours des sigma donnes a SURE
         for sigma in params['sigma']:
@@ -156,10 +226,67 @@ for isnr in params['isnr']:
 
             oSNR_sigma_list_demucs.append(osnr_demucs)
 
+            del denoised_sure_demucs
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            #SGMSE
+            print(
+                f"SGMSE SURE | extract {sound_number}/{len(sound_files_clean)} | "
+                f"iSNR={isnr} | sigma={sigma:.3e}"
+            )
+            
+            sgmse_duration=1.5
+            sgmse_len=int(sgmse_duration*samplerate)
+
+            noisy_sound_sgmse=noisy_sound[:sgmse_len]
+            sound_sgmse=sound[:sgmse_len]
+
+            denoised_sure_sgmse = sgmse_sure_denoise(
+                audio_np=noisy_sound_sgmse,
+                sigma=sigma,
+                checkpoint_path=params["sgmse_checkpoint"],
+                fs=samplerate,
+                steps=params["sgmse_sure_steps"],
+                lr=params["sgmse_sure_lr"],
+                tau=params["sgmse_sure_tau"],
+                mc_batch_size=params["sgmse_sure_mc_batch_size"],
+                sgmse_N=params["sgmse_sure_N"],
+                corrector=params["sgmse_corrector"],
+                corrector_steps=params["sgmse_corrector_steps"],
+                snr=params["sgmse_snr"],
+                t_eps=params["sgmse_t_eps"],
+                debug=False,
+            )
+            
+            denoised_sure_sgmse = denoised_sure_sgmse[:len(sound_sgmse)]
+            
+            osnr_sgmse = SNR(
+                sound_sgmse,
+                denoised_sure_sgmse,
+            )
+
+            if not np.isfinite(osnr_sgmse):
+                print("WARNING: SGMSE oSNR is NaN/inf, replacing with noisy baseline")
+                osnr_sgmse = SNR(sound_sgmse, noisy_sound_sgmse)
+            
+
+
+            del denoised_sure_sgmse
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            oSNR_sigma_list_sgmse.append(osnr_sgmse)
+
+
+
         #Graphe individuel oSNR en fonction de sigma
         sigma_array=np.array(params['sigma'])
         oSNR_sigma_array=np.array(oSNR_sigma_list)
         oSNR_sigma_array_demucs=np.array(oSNR_sigma_list_demucs)
+        oSNR_sigma_array_sgmse=np.array(oSNR_sigma_list_sgmse)
 
         mask=sigma_array>0
 
@@ -175,6 +302,12 @@ for isnr in params['isnr']:
             sigma_array[mask],
             oSNR_sigma_array_demucs[mask],
             label='DEMUCS, iSNR = '+str(isnr)+' dB'
+        )
+
+        plt.semilogx(
+            sigma_array[mask],
+            oSNR_sigma_array_sgmse[mask],
+            label='SGMSE, iSNR = '+str(isnr)+' dB'
         )
 
         plt.axvline(
@@ -203,6 +336,7 @@ for isnr in params['isnr']:
 
         all_oSNR[isnr].append(oSNR_sigma_list)
         all_oSNR_demucs[isnr].append(oSNR_sigma_list_demucs)
+        all_oSNR_sgmse[isnr].append(oSNR_sigma_list_sgmse)
         all_sure_thresholds[isnr].append(sure_threshold_list)
         all_sigma_true[isnr].append(sigma_true)
 
@@ -225,9 +359,9 @@ CSV_export.append([
     'Mean oSNR DEMUCS',
     'Standard deviation oSNR DEMUCS',
     'Uncertainty oSNR DEMUCS',
-    'Mean SURE drywet',
-    'Std SURE drywet',
-    'Uncertainty SURE drywet',
+    'Mean oSNR SGMSE',
+    'Standard deviation oSNR SGMSE',
+    'Uncertainty oSNR SGMSE',
     'Mean true sigma',
     'Std true sigma',
     'Uncertainty true sigma',
@@ -238,6 +372,7 @@ for isnr in params['isnr']:
 
     oSNR_array=np.array(all_oSNR[isnr])
     oSNR_array_demucs=np.array(all_oSNR_demucs[isnr])
+    oSNR_array_sgmse=np.array(all_oSNR_sgmse[isnr])
     sure_thresholds_array=np.array(all_sure_thresholds[isnr])
     sigma_true_array=np.array(all_sigma_true[isnr])
     sigma_array=np.array(params['sigma'])
@@ -259,6 +394,15 @@ for isnr in params['isnr']:
         std_oSNR_demucs=np.zeros(len(mean_oSNR_demucs))
 
     uncertainty_demucs=std_oSNR_demucs/np.sqrt(N)
+
+    mean_oSNR_sgmse=np.mean(oSNR_array_sgmse,axis=0)
+
+    if N>1:
+        std_oSNR_sgmse=np.std(oSNR_array_sgmse,axis=0,ddof=1)
+    else:
+        std_oSNR_sgmse=np.zeros(len(mean_oSNR_sgmse))
+
+    uncertainty_sgmse=std_oSNR_sgmse/np.sqrt(N)
 
     mean_sure_threshold=np.mean(sure_thresholds_array,axis=0)
 
@@ -308,6 +452,19 @@ for isnr in params['isnr']:
         alpha=0.2
     )
 
+    plt.semilogx(
+        sigma_array[mask],
+        mean_oSNR_sgmse[mask],
+        label='SGMSE, iSNR = '+str(isnr)+' dB'
+    )
+
+    plt.fill_between(
+        sigma_array[mask],
+        mean_oSNR_sgmse[mask]-uncertainty_sgmse[mask],
+        mean_oSNR_sgmse[mask]+uncertainty_sgmse[mask],
+        alpha=0.2
+    )
+
     plt.axvline(
         mean_sigma_true,
         color='black',
@@ -336,6 +493,9 @@ for isnr in params['isnr']:
             mean_oSNR_demucs[i],
             std_oSNR_demucs[i],
             uncertainty_demucs[i],
+            mean_oSNR_sgmse[i],
+            std_oSNR_sgmse[i],
+            uncertainty_sgmse[i],
             mean_sigma_true,
             std_sigma_true,
             sigma_true_uncertainty,

@@ -7,10 +7,19 @@ channels:
 
 dependencies:
   - conda-forge::python=3.11
+
+  # GPU PyTorch stack
   - pytorch::pytorch=2.5.1
   - pytorch::torchvision=0.20.1
   - pytorch::torchaudio=2.5.1
   - pytorch::pytorch-cuda=12.4
+
+  # CUDA build tooling for SGMSE custom extensions
+  - nvidia::cuda-nvcc=12.4
+  - nvidia::cuda-toolkit=12.4
+  - conda-forge::ninja
+
+  # Normal packages
   - conda-forge::numpy
   - conda-forge::scipy
   - conda-forge::matplotlib
@@ -19,8 +28,11 @@ dependencies:
   - conda-forge::pysoundfile
   - conda-forge::tqdm
   - conda-forge::pesq
+  - conda-forge::gdown
+  - conda-forge::git
   - conda-forge::pip
+
   - pip:
       - denoiser
-      - sgmse
       - deepinv
+      - git+https://github.com/sp-uhh/sgmse.git
