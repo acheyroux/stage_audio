@@ -70,7 +70,7 @@ if type(params['isnr'])!=list:
 
 def clustered_logspace(N, low=1e-3, high=1.0,
                        band=(5e-2, 2e-1),
-                       frac_in_band=0.5):
+                       frac_in_band=0.65):
     """
     Log-spaced points from low to high, with roughly frac_in_band
     of points between band[0] and band[1].
@@ -103,14 +103,24 @@ def clustered_logspace(N, low=1e-3, high=1.0,
     return np.concatenate(parts)
 
 
-params['sigma']=clustered_logspace(20)#np.logspace(-3,0,5)
+params['sigma']=clustered_logspace(16)#np.logspace(-3,0,5)
 params['drywet']=np.linspace(0,1,100)
+
+
+# Parametres UNSURE pour l'estimation de sigma
+params["unsure_sigma_steps"] = 200
+params["unsure_sigma_batch_size"] = 32
+params["unsure_sigma_patch_size"] = 8192
+params["unsure_sigma_lr"] = 1e-3
+params["unsure_sigma_tau"] = 1e-3
+params["unsure_sigma_step_size"] = 1e-4
+params["unsure_sigma_momentum"] = 0.9
 
 
 #SGMSE
 params["sgmse_checkpoint"] = "../../../data/sgmse_voicebank.ckpt"
-params["sgmse_sure_steps"] = 100
-params["sgmse_sure_lr"] = 1e-4
+params["sgmse_sure_steps"] = 30
+params["sgmse_sure_lr"] = 8e-5
 params["sgmse_sure_N"] = 1
 params["sgmse_sure_mc_batch_size"] = 1
 params["sgmse_sure_tau"] = 1e-3
@@ -139,6 +149,7 @@ all_oSNR_demucs={}
 all_oSNR_sgmse={}
 all_sure_thresholds={}
 all_sigma_true={}
+all_sigma_estimate={}
 
 #Parcours la liste des iSNR de params.txt
 for isnr in params['isnr']:
@@ -148,6 +159,7 @@ for isnr in params['isnr']:
     all_oSNR_sgmse[isnr]=[]
     all_sure_thresholds[isnr]=[]
     all_sigma_true[isnr]=[]
+    all_sigma_estimate[isnr]=[]
 
     #Parcours les fichiers sonores
     for sound_file in sound_files_clean:
@@ -174,6 +186,26 @@ for isnr in params['isnr']:
 
         if sigma_true<10**-2:
             continue
+
+        # Estimation UNSURE du sigma pour cet extrait
+        sigma_estimate = estimate_sigma_unsure_audio(
+            noisy_sound,
+            sigma_init=robust_sigma_init_from_differences(noisy_sound),
+            steps=params["unsure_sigma_steps"],
+            batch_size=params["unsure_sigma_batch_size"],
+            patch_size=params["unsure_sigma_patch_size"],
+            lr=params["unsure_sigma_lr"],
+            tau=params["unsure_sigma_tau"],
+            unsure_step_size=params["unsure_sigma_step_size"],
+            unsure_momentum=params["unsure_sigma_momentum"],
+            verbose=False,
+        )
+        
+        print(
+            f"Sigma | extract {sound_number}/{len(sound_files_clean)} | "
+            f"iSNR={isnr} | true={sigma_true:.4e} | UNSURE={sigma_estimate:.4e}"
+        )
+
         
         #Creation de la liste des seuils a tester dans SURE
         oracle_threshold,figure,thresholds,oSNR_threshold_list=find_oracle_threshold(
@@ -358,6 +390,14 @@ for isnr in params['isnr']:
             label='True sigma'
         )
 
+        plt.axvline(
+            sigma_estimate,
+            color='red',
+            linestyle='--',
+            linewidth=2,
+            label='UNSURE estimated sigma'
+        )
+
         plt.xlabel('Sigma given to SURE')
         plt.ylabel('oSNR')
         plt.title('oSNR as function of sigma given to SURE - '+str(sound_number))
@@ -379,6 +419,7 @@ for isnr in params['isnr']:
         all_oSNR_sgmse[isnr].append(oSNR_sigma_list_sgmse)
         all_sure_thresholds[isnr].append(sure_threshold_list)
         all_sigma_true[isnr].append(sigma_true)
+        all_sigma_estimate[isnr].append(sigma_estimate)
 
 #Nombre d'extraits
 N=len(sound_files_clean)
@@ -405,6 +446,9 @@ CSV_export.append([
     'Mean true sigma',
     'Std true sigma',
     'Uncertainty true sigma',
+    'Mean UNSURE sigma',
+    'Std UNSURE sigma',
+    'Uncertainty UNSURE sigma',
     'Number of extracts'
 ])
 
@@ -416,7 +460,7 @@ for isnr in params['isnr']:
     sure_thresholds_array=np.array(all_sure_thresholds[isnr])
     sigma_true_array=np.array(all_sigma_true[isnr])
     sigma_array=np.array(params['sigma'])
-
+    sigma_estimate_array=np.array(all_sigma_estimate[isnr])
     mean_oSNR=np.mean(oSNR_array,axis=0)
 
     if N>1:
@@ -464,6 +508,17 @@ for isnr in params['isnr']:
 
     sigma_true_uncertainty=std_sigma_true/np.sqrt(N)
 
+    mean_sigma_estimate=np.mean(sigma_estimate_array)
+
+    if N>1:
+        std_sigma_estimate=np.std(sigma_estimate_array,ddof=1)
+    else:
+        std_sigma_estimate=0
+    
+    sigma_estimate_uncertainty=std_sigma_estimate/np.sqrt(N)
+
+
+    
     mask=sigma_array>0
 
     plt.semilogx(
@@ -520,6 +575,22 @@ for isnr in params['isnr']:
         alpha=0.15
     )
 
+
+    plt.axvline(
+        mean_sigma_estimate,
+        color='red',
+        linestyle='--',
+        linewidth=2,
+        label='Mean UNSURE sigma, iSNR = '+str(isnr)+' dB'
+    )
+    
+    plt.axvspan(
+        max(mean_sigma_estimate-sigma_estimate_uncertainty,np.min(sigma_array[mask])),
+        mean_sigma_estimate+sigma_estimate_uncertainty,
+        color='red',
+        alpha=0.15
+    )
+
     for i in range(len(sigma_array)):
         CSV_export.append([
             isnr,
@@ -539,6 +610,9 @@ for isnr in params['isnr']:
             mean_sigma_true,
             std_sigma_true,
             sigma_true_uncertainty,
+            mean_sigma_estimate,
+            std_sigma_estimate,
+            sigma_estimate_uncertainty,
             N
         ])
 

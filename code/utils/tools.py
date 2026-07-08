@@ -1577,18 +1577,21 @@ def sgmse_sure_denoise(
         optimizer.step()
 
         current_sure = float(loss.detach().cpu())
+        for group in optimizer.param_groups:
+            group["lr"] = effective_lr * 1
+        '''
         if current_sure < 1e-1:
             for group in optimizer.param_groups:
                 group["lr"] = effective_lr * 0.7
                 
         if current_sure < 1e-2:
             for group in optimizer.param_groups:
-                group["lr"] = effective_lr * 0.23
+                group["lr"] = effective_lr * 0.2
 
         if current_sure < 6e-3:
             for group in optimizer.param_groups:
-                group["lr"] = effective_lr * 0.04
-
+                group["lr"] = effective_lr * 0.08
+'''
         current_lr = optimizer.param_groups[0]["lr"]
         
         print(
