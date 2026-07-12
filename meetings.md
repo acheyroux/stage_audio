@@ -1,4 +1,16 @@
 # Compte-rendus des meetings
+## Meeting du 13/07/2026 (Modifiée 12/07/2026)
+
+**Fait :**
+- Graphes de comparaison
+- Rapport de stage
+
+**À faire :**
+- Finalisation du GitHub
+- Nettoyage de tous les scripts
+- Corrections à faire dans le rapport de stage
+- Diapositif pour la soutenance orale
+
 ## Meeting du 06/07/2026 (Modifiée 05/07/2026)
 
 **Fait :**
