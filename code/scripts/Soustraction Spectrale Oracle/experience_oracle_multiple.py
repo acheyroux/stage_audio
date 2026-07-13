@@ -11,7 +11,7 @@ import os
 
 sys.path.append("../../utils")
 import noise
-from tools import find_oracle_threshold, denoise_spectral_sub, deepinv_sure_spectral_sub_threshold_search
+from tools import find_oracle_threshold, denoise_spectral_sub, deepinv_sure_spectral_sub_threshold_search_torch
 
 #Creation du dossier de l'experience
 path="../../../results/"+datetime.now().strftime("%Y%m%d_%H%M")+"_experience_multiple_soustraction_spectrale"
@@ -93,12 +93,11 @@ for isnr in params['isnr']:
         )
         
         # Recherche seuil SURE avec la vraie fonction denoise_spectral_sub
-        denoised_sure, sure_threshold, sure_values = deepinv_sure_spectral_sub_threshold_search(
+        denoised_sure, sure_threshold, sure_values = deepinv_sure_spectral_sub_threshold_search_torch(
             y_np=noisy_sound,
             thresholds=thresholds,
             sigma=sigma,
             fs=samplerate,
-            denoise_func=denoise_spectral_sub,
             chunk_size=16384,
             tau=0.01,
             n_sure_repeats=1,

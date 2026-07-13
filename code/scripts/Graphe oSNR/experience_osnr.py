@@ -1,3 +1,4 @@
+#Librairies
 import numpy as np
 import matplotlib.pyplot as plt
 import soundfile as sf
@@ -16,49 +17,23 @@ from tools import (
     find_oracle_threshold,
     denoise_spectral_sub,
     demucs_denoise,
-    deepinv_sure_param_search,
     SpectralSubNumpyWrapper,
-    deepinv_sure_spectral_sub_threshold_search,
     deepinv_sure_demucs_drywet_search_cached,
     deepinv_sure_spectral_sub_threshold_search_torch,
     demucs_sure_denoise,
     sgmse_sure_denoise,
     estimate_sigma_unsure_audio,
     robust_sigma_init_from_differences,
+    read_params
 )
 
+#Initialisation de l'experience
 epath = "../../../results/" + datetime.now().strftime("%Y%m%d_%H%M") + "_experience_oSNR_sigma_sure_soustraction_spectrale_demucs"
 os.mkdir(epath)
 
 CSV_export = []
 
-parameters = open('params_multiple.txt')
-params = {}
-for full_line in parameters:
-    line = full_line.strip()
-    if not line[0] == '#':
-        key, value = line.split('=', 1)
-        val = value.strip().split(',')
-        if len(val) != 1:
-            for i in range(len(val)):
-                val[i] = float(val[i].strip())
-        else:
-            val = val[0].strip()
-            if val.isdigit():
-                val = int(val)
-            elif val == 'True':
-                val = True
-            elif val == 'False':
-                val = False
-            else:
-                try:
-                    val = float(val)
-                except:
-                    val = val
-        params[key.strip()] = val
-
-if type(params['isnr']) != list:
-    params['isnr'] = [params['isnr']]
+params=read_params(open('params.txt'))
 
 
 def clustered_logspace(N, low=1e-3, high=1.0, band=(5e-2, 2e-1), frac_in_band=0.65):
@@ -212,27 +187,20 @@ def select_sgmse_clip(
 
     return noisy_clip, sound_clip, best_start, best_power, min_power, False
 
-params["sgmse_duration"] = 1.5
 params["sgmse_min_power_fraction"] = 0.1
 params["sgmse_clip_max_rerolls"] = 30
     
 
-params["sigma_specdemucs"] = clustered_logspace(2)
-params["sigma_sgmse"] = clustered_logspace(14)
+params["sigma_specdemucs"] = clustered_logspace(50)
+params["sigma_sgmse"] = clustered_logspace(30)
 params['drywet'] = np.linspace(0, 1, 100)
 
-params["unsure_sigma_steps"] = 200
-params["unsure_sigma_batch_size"] = 32
 params["unsure_sigma_patch_size"] = 8192
-params["unsure_sigma_lr"] = 1e-3
 params["unsure_sigma_tau"] = 1e-3
 params["unsure_sigma_step_size"] = 1e-4
 params["unsure_sigma_momentum"] = 0.9
 
 params["sgmse_checkpoint"] = "../../../data/sgmse_voicebank.ckpt"
-params["sgmse_sure_steps"] = 50
-params["sgmse_sure_lr"] = 8e-5
-params["sgmse_sure_N"] = 1
 params["sgmse_sure_mc_batch_size"] = 1
 params["sgmse_sure_tau"] = 1e-3
 params["sgmse_snr"] = 0.5
@@ -296,10 +264,10 @@ for isnr in params['isnr']:
         sigma_estimate = estimate_sigma_unsure_audio(
             noisy_sound,
             sigma_init=robust_sigma_init_from_differences(noisy_sound),
-            steps=params["unsure_sigma_steps"],
-            batch_size=params["unsure_sigma_batch_size"],
+            steps=params["unsure_steps"],
+            batch_size=params["unsure_batch_size"],
             patch_size=params["unsure_sigma_patch_size"],
-            lr=params["unsure_sigma_lr"],
+            lr=params["unsure_lr"],
             tau=params["unsure_sigma_tau"],
             unsure_step_size=params["unsure_sigma_step_size"],
             unsure_momentum=params["unsure_sigma_momentum"],
@@ -354,10 +322,10 @@ for isnr in params['isnr']:
             denoised_sure_demucs = demucs_sure_denoise(
                 noisy_sound,
                 sigma,
-                steps=7,
-                lr=3e-4,
+                steps=params["demucs_sure_steps"],
+                lr=params["demucs_sure_lr"],
                 tau=1e-3,
-                mc_batch_size=5,
+                mc_batch_size=params["demucs_sure_batch_size"],
                 debug=False,
             )
 
@@ -612,7 +580,7 @@ for isnr in params['isnr']:
     else:
         std_oSNR_sgmse = np.zeros(len(mean_oSNR_sgmse))
 
-    uncertainty_sgmse = std_oSNR_sgmse / np.sqrt(10)
+    uncertainty_sgmse = std_oSNR_sgmse / np.sqrt(N)
 
     mean_sure_threshold = np.mean(sure_thresholds_array, axis=0)
 

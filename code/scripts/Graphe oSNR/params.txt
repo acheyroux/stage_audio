@@ -1,0 +1,14 @@
+isnr=5
+pure_sound_folder=musdb18hq/train
+track_samples=20
+sound_type=mixture
+sgmse_duration=1.5
+sgmse_sure_N=1
+sgmse_sure_lr=8e-5
+sgmse_sure_steps=100
+demucs_sure_steps=20
+demucs_sure_batch_size=5
+demucs_sure_lr=3e-4
+unsure_steps=200
+unsure_batch_size=32
+unsure_lr=1e-3

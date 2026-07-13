@@ -14,6 +14,11 @@ from sgmse.model import ScoreModel
 from sgmse.util.other import pad_spec
 from sgmse.sampling import PredictorRegistry, CorrectorRegistry
 
+#PyTorch
+from torch import nn
+import deepinv as dinv
+
+
 
 #Recherche GPU/CPU
 device = torch.device("cpu")
@@ -23,6 +28,37 @@ if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = torch.device("mps")
 
 print("Chosen device"+str(device))
+
+#Fonction pour lecture de parametres.txt
+def read_params(parameters_txt):
+    params = {}
+    for full_line in parameters_txt:
+        line = full_line.strip()
+        if not line[0] == '#':
+            key, value = line.split('=', 1)
+            val = value.strip().split(',')
+            if len(val) != 1:
+                for i in range(len(val)):
+                    val[i] = float(val[i].strip())
+            else:
+                val = val[0].strip()
+                if val.isdigit():
+                    val = int(val)
+                elif val == 'True':
+                    val = True
+                elif val == 'False':
+                    val = False
+                else:
+                    try:
+                        val = float(val)
+                    except:
+                        val = val
+            params[key.strip()] = val
+    
+    if type(params['isnr']) != list:
+        params['isnr'] = [params['isnr']]
+    return params
+
 
 
 def signal(x,fs,show=False):
@@ -188,348 +224,6 @@ def find_oracle_threshold(x,xb,sigma,fs,denoise_func,graph=False):
     return oracle_threshold
 
 #SURE (cf ChatGPT)
-from torch import nn
-import deepinv as dinv
-
-
-class SpectralSubNumpyWrapper(nn.Module):
-    """
-    Wraps your actual NumPy spectral subtraction function so DeepInv can call it.
-
-    Your denoise function must look like:
-        denoise_spectral_sub(y, sigma, threshold, fs) -> (t_denoise, y_denoise)
-
-    Input tensor shape:
-        [B, 1, 1, T]
-
-    Output tensor shape:
-        [B, 1, 1, T]
-    """
-
-    def __init__(self, denoise_func, sigma, threshold, fs):
-        super().__init__()
-        self.denoise_func = denoise_func
-        self.sigma = float(sigma)
-        self.threshold = float(threshold)
-        self.fs = float(fs)
-
-    def forward(self, y, *args, **kwargs):
-        device = y.device
-        dtype = y.dtype
-
-        y_cpu = y.detach().cpu().numpy()
-        out = np.zeros_like(y_cpu)
-
-        batch_size = y_cpu.shape[0]
-
-        for i in range(batch_size):
-            signal_1d = y_cpu[i, 0, 0, :]
-
-            _, denoised_1d = self.denoise_func(
-                signal_1d,
-                self.sigma,
-                self.threshold,
-                self.fs
-            )
-
-            denoised_1d = np.asarray(denoised_1d, dtype=y_cpu.dtype)
-
-            # Force same length as input
-            if len(denoised_1d) > len(signal_1d):
-                denoised_1d = denoised_1d[:len(signal_1d)]
-            elif len(denoised_1d) < len(signal_1d):
-                denoised_1d = np.pad(
-                    denoised_1d,
-                    (0, len(signal_1d) - len(denoised_1d)),
-                    mode="constant"
-                )
-
-            out[i, 0, 0, :] = denoised_1d
-
-        return torch.from_numpy(out).to(device=device, dtype=dtype)
-
-
-def deepinv_sure_spectral_sub_threshold_search(
-    y_np,
-    thresholds,
-    sigma,
-    fs,
-    denoise_func,
-    chunk_size=16384,
-    device=None,
-    tau=0.01,
-    n_sure_repeats=1,
-):
-    """
-    Finds the SURE-minimizing threshold using your actual spectral subtraction
-    function denoise_spectral_sub.
-    """
-
-    if device is None:
-        device = dinv.utils.get_device()
-
-    y_np = np.asarray(y_np, dtype=np.float32)
-
-    if y_np.ndim != 1:
-        raise ValueError("y_np must be a mono 1D NumPy array.")
-
-    if sigma <= 0:
-        raise ValueError("sigma must be positive.")
-
-    thresholds = np.asarray(thresholds, dtype=float)
-
-    original_len = len(y_np)
-
-    pad_len = (-original_len) % chunk_size
-
-    if pad_len > 0:
-        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
-    else:
-        y_padded = y_np
-
-    chunks = y_padded.reshape(-1, chunk_size)
-
-    # DeepInv expects image-like tensors: [B, C, H, W]
-    # For 1D audio, we use [chunks, 1, 1, chunk_size]
-    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
-
-    physics = dinv.physics.Denoising(
-        noise_model=dinv.physics.GaussianNoise(sigma=float(sigma))
-    )
-
-    sure_loss = dinv.loss.SureGaussianLoss(
-        sigma=float(sigma),
-        tau=float(tau)
-    )
-
-    sure_values = []
-
-    for threshold in thresholds:
-
-        model = SpectralSubNumpyWrapper(
-            denoise_func=denoise_func,
-            sigma=sigma,
-            threshold=threshold,
-            fs=fs
-        ).to(device)
-
-        x_net = model(y_tensor)
-
-        repeated_losses = []
-
-        for _ in range(n_sure_repeats):
-            loss = sure_loss(
-                x_net=x_net,
-                y=y_tensor,
-                physics=physics,
-                model=model,
-            )
-
-            repeated_losses.append(loss.detach().mean().cpu().item())
-
-        sure_scalar = float(np.mean(repeated_losses))
-        sure_values.append(sure_scalar)
-
-    sure_values = np.asarray(sure_values)
-
-    best_idx = int(np.argmin(sure_values))
-    best_threshold = float(thresholds[best_idx])
-
-    print("SURE best index:", best_idx, "/", len(thresholds) - 1)
-    print("SURE best threshold:", best_threshold)
-    print("SURE first value:", sure_values[0])
-    print("SURE best value:", sure_values[best_idx])
-    print("SURE last value:", sure_values[-1])
-
-    if best_idx == len(thresholds) - 1:
-        print("WARNING: SURE selected the maximum tested threshold.")
-
-    best_model = SpectralSubNumpyWrapper(
-        denoise_func=denoise_func,
-        sigma=sigma,
-        threshold=best_threshold,
-        fs=fs
-    ).to(device)
-
-    with torch.no_grad():
-        x_best = best_model(y_tensor)
-
-    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
-    best_denoised = denoised_chunks.reshape(-1)[:original_len]
-
-    return best_denoised, best_threshold, sure_values
-
-
-class NumpyDenoiserWrapper(nn.Module):
-    def __init__(self, denoise_func, sigma, param, fs):
-        super().__init__()
-        self.denoise_func = denoise_func
-        self.sigma = float(sigma)
-        self.param = float(param)
-        self.fs = int(fs)
-
-    def forward(self, y, *args, **kwargs):
-        input_device = y.device
-        input_dtype = y.dtype
-
-        y_cpu = y.detach().cpu().numpy()
-        out = np.zeros_like(y_cpu)
-
-        batch_size = y_cpu.shape[0]
-
-        for i in range(batch_size):
-            signal_1d = y_cpu[i, 0, 0, :]
-
-            _, denoised_1d = self.denoise_func(
-                signal_1d,
-                self.sigma,
-                self.param,
-                self.fs
-            )
-
-            denoised_1d = np.asarray(denoised_1d, dtype=y_cpu.dtype)
-
-            if len(denoised_1d) > len(signal_1d):
-                denoised_1d = denoised_1d[:len(signal_1d)]
-            elif len(denoised_1d) < len(signal_1d):
-                denoised_1d = np.pad(
-                    denoised_1d,
-                    (0, len(signal_1d) - len(denoised_1d)),
-                    mode="constant"
-                )
-
-            out[i, 0, 0, :] = denoised_1d
-
-        return torch.from_numpy(out).to(device=input_device, dtype=input_dtype)
-def deepinv_sure_param_search(
-    y_np,
-    param_values,
-    sigma,
-    fs,
-    denoise_func,
-    chunk_size=16384,
-    device=None,
-    tau=0.01,
-    n_sure_repeats=1,
-    param_name="param",
-):
-    """
-    Finds the SURE-minimizing value of the third denoiser parameter.
-
-    The denoise function must have the format:
-        denoise_func(y, sigma, param, fs) -> (t_denoise, y_denoise)
-
-    Examples
-    --------
-    Spectral subtraction:
-        param = threshold
-
-    Demucs:
-        param = drywet
-
-    SGMSE:
-        param = N, if your SGMSE function interprets the third argument as N
-    """
-
-    if device is None:
-        device = dinv.utils.get_device()
-
-    y_np = np.asarray(y_np, dtype=np.float32)
-
-    if y_np.ndim != 1:
-        raise ValueError("y_np must be a mono 1D NumPy array.")
-
-    if sigma <= 0:
-        raise ValueError("sigma must be positive.")
-
-    param_values = np.asarray(param_values, dtype=float)
-
-    original_len = len(y_np)
-
-    pad_len = (-original_len) % chunk_size
-
-    if pad_len > 0:
-        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
-    else:
-        y_padded = y_np
-
-    chunks = y_padded.reshape(-1, chunk_size)
-
-    # DeepInv expects image-like tensors: [B, C, H, W]
-    # For 1D audio, we use [chunks, 1, 1, chunk_size]
-    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
-
-    physics = dinv.physics.Denoising(
-        noise_model=dinv.physics.GaussianNoise(sigma=float(sigma))
-    )
-
-    sure_loss = dinv.loss.SureGaussianLoss(
-        sigma=float(sigma),
-        tau=float(tau)
-    )
-
-    sure_values = []
-
-    for param in param_values:
-
-        model = NumpyDenoiserWrapper(
-            denoise_func=denoise_func,
-            sigma=sigma,
-            param=param,
-            fs=fs
-        ).to(device)
-
-        x_net = model(y_tensor)
-
-        repeated_losses = []
-
-        for _ in range(n_sure_repeats):
-            loss = sure_loss(
-                x_net=x_net,
-                y=y_tensor,
-                physics=physics,
-                model=model,
-            )
-
-            repeated_losses.append(loss.detach().mean().cpu().item())
-
-        sure_scalar = float(np.mean(repeated_losses))
-        sure_values.append(sure_scalar)
-
-    sure_values = np.asarray(sure_values)
-
-    best_idx = int(np.argmin(sure_values))
-    best_param = float(param_values[best_idx])
-
-    print("SURE best index:", best_idx, "/", len(param_values) - 1)
-    print(f"SURE best {param_name}:", best_param)
-    print("SURE first value:", sure_values[0])
-    print("SURE best value:", sure_values[best_idx])
-    print("SURE last value:", sure_values[-1])
-
-    if best_idx == len(param_values) - 1:
-        print(f"WARNING: SURE selected the maximum tested {param_name}.")
-
-    if best_idx == 0:
-        print(f"WARNING: SURE selected the minimum tested {param_name}.")
-
-    best_model = NumpyDenoiserWrapper(
-        denoise_func=denoise_func,
-        sigma=sigma,
-        param=best_param,
-        fs=fs
-    ).to(device)
-
-    with torch.no_grad():
-        x_best = best_model(y_tensor)
-
-    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
-    best_denoised = denoised_chunks.reshape(-1)[:original_len]
-
-    return best_denoised, best_param, sure_values
-
-
-
 #Debruiteurs Deep
 #DEMUCS
 _DEVICE=device
@@ -567,40 +261,7 @@ def demucs_denoise(y,sigma,drywet,fs):
 
 
 '''
-#DEMUCS
-from denoiser import pretrained #DEMUCS
-from denoiser.dsp import convert_audio
 
-
-def denoise_demucs(y,sigma,threshold,fs)
-    #Detection de GPU/CPU
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
-    #Import du fichier sonore et modele DEMUCS
-    sound,samplerate=y,fs
-    
-    model = getattr(pretrained, params['demucs_pretrained_model'])()
-    model = model.to(device)
-    model.eval()
-    model_sample_rate=model.sample_rate
-
-    sound_t=torch.from_numpy(sound).float()[None, :]
-    sound=convert_audio(sound_tensor,samplerate,model_sample_rate,1)[0].detach().cpu().numpy()
-
-    
-    sound_t=convert_audio(torch.from_numpy(sound).float()[None, :],samplerate,model_sample_rate,1)[0].detach().cpu().numpy()
-
-    
-    with torch.no_grad():
-
-
-
-        #Debruitage DEMUCS
-        son_bt = torch.from_numpy(son_b).float()[None, :].to(device)
-        son_dt=model(son_bt[None])
-        y_denoise=son_dt[0, 0].detach().cpu().numpy()
-
-    return t_denoise,y_denoise
     '''
 
 def _demucs_forward_tensor_chunks(y_tensor, fs):
@@ -654,148 +315,7 @@ def _demucs_forward_tensor_chunks(y_tensor, fs):
 
     return y_hat[:, :, None, :]  # [B, 1, 1, T]
 
-def deepinv_sure_demucs_drywet_search_cached(
-    y_np,
-    drywet_values,
-    sigma,
-    fs,
-    chunk_size=65536,
-    device=None,
-    tau=0.01,
-    n_sure_repeats=1,
-    param_name="drywet",
-):
-    """
-    SURE search for DEMUCS dry/wet without rerunning DEMUCS for every dry/wet.
 
-    Instead of doing:
-
-        for drywet in drywet_values:
-            run DEMUCS
-            compute SURE
-
-    this function does:
-
-        run DEMUCS once on y
-        run DEMUCS once per SURE perturbation
-        evaluate all dry/wet values cheaply by linear interpolation
-
-    Denoiser form:
-        A_drywet(y) = drywet * DEMUCS(y) + (1 - drywet) * y
-
-    This keeps the finite-difference SURE estimate correct for the dry/wet
-    family, while avoiding repeated DEMUCS calls for every dry/wet value.
-    """
-
-    if device is None:
-        device = dinv.utils.get_device()
-
-    y_np = np.asarray(y_np, dtype=np.float32)
-
-    if y_np.ndim != 1:
-        raise ValueError("y_np must be a mono 1D NumPy array.")
-
-    if sigma <= 0:
-        raise ValueError("sigma must be positive.")
-
-    drywet_values = np.asarray(drywet_values, dtype=float)
-
-    if np.any(drywet_values < 0) or np.any(drywet_values > 1):
-        raise ValueError("drywet_values should be between 0 and 1.")
-
-    original_len = len(y_np)
-
-    pad_len = (-original_len) % chunk_size
-
-    if pad_len > 0:
-        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
-    else:
-        y_padded = y_np
-
-    chunks = y_padded.reshape(-1, chunk_size)
-
-    # DeepInv-style tensor shape for 1D audio: [chunks, 1, 1, chunk_size]
-    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
-
-    # Number of scalar samples per chunk, used for normalized SURE.
-    n_per_chunk = y_tensor[0].numel()
-
-    # ------------------------------------------------------------
-    # 1. Run DEMUCS once on the clean noisy input y.
-    # ------------------------------------------------------------
-    demucs_y = _demucs_forward_tensor_chunks(y_tensor, fs)
-
-    sure_accum = torch.zeros(
-        len(drywet_values),
-        device=device,
-        dtype=y_tensor.dtype,
-    )
-
-    # ------------------------------------------------------------
-    # 2. SURE Monte Carlo loop.
-    #    DEMUCS is run once per perturbation, not once per dry/wet.
-    # ------------------------------------------------------------
-    for _ in range(n_sure_repeats):
-        b = torch.randn_like(y_tensor)
-        y_perturbed = y_tensor + tau * b
-
-        demucs_y_perturbed = _demucs_forward_tensor_chunks(y_perturbed, fs)
-
-        for i, drywet in enumerate(drywet_values):
-            drywet = float(drywet)
-
-            # A(y)
-            x_net = drywet * demucs_y + (1.0 - drywet) * y_tensor
-
-            # A(y + tau b)
-            x_net_perturbed = (
-                drywet * demucs_y_perturbed
-                + (1.0 - drywet) * y_perturbed
-            )
-
-            residual_term = (x_net - y_tensor).pow(2).flatten(1).sum(dim=1)
-            residual_term = residual_term / n_per_chunk
-
-            divergence_term = (
-                b * (x_net_perturbed - x_net) / tau
-            ).flatten(1).sum(dim=1)
-            divergence_term = divergence_term / n_per_chunk
-
-            sure_per_chunk = (
-                residual_term
-                - float(sigma) ** 2
-                + 2.0 * float(sigma) ** 2 * divergence_term
-            )
-
-            sure_accum[i] += sure_per_chunk.mean()
-
-    sure_values = (sure_accum / n_sure_repeats).detach().cpu().numpy()
-
-    best_idx = int(np.argmin(sure_values))
-    best_drywet = float(drywet_values[best_idx])
-
-    print("SURE best index:", best_idx, "/", len(drywet_values) - 1)
-    print(f"SURE best {param_name}:", best_drywet)
-    print("SURE first value:", sure_values[0])
-    print("SURE best value:", sure_values[best_idx])
-    print("SURE last value:", sure_values[-1])
-
-    if best_idx == len(drywet_values) - 1:
-        print(f"WARNING: SURE selected the maximum tested {param_name}.")
-
-    if best_idx == 0:
-        print(f"WARNING: SURE selected the minimum tested {param_name}.")
-
-    # ------------------------------------------------------------
-    # 3. Build best denoised signal without rerunning DEMUCS.
-    # ------------------------------------------------------------
-    with torch.no_grad():
-        x_best = best_drywet * demucs_y + (1.0 - best_drywet) * y_tensor
-
-    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
-    best_denoised = denoised_chunks.reshape(-1)[:original_len]
-
-    return best_denoised, best_drywet, sure_values
 
 #Optimisation GPU Torch pour recherche SURE
 def deepinv_sure_spectral_sub_threshold_search_torch(
@@ -1629,11 +1149,6 @@ def sgmse_sure_denoise(
     if best_state is not None:
         sgmse_model.load_state_dict(best_state)
 
-    # Important:
-    # Do NOT call sgmse_model.eval() here.
-    # The wrapped ScoreModel has custom EMA train/eval behavior.
-    # We already copied EMA once during initialization.
-
     with torch.no_grad():
         output_after = sgmse_model(noisy_audio)
 
@@ -1897,3 +1412,532 @@ def estimate_sigma_unsure_audio(
         sigma_hat = sigma_init
 
     return float(sigma_hat)
+
+
+
+
+
+
+
+#------------------------------------#
+#-----------  ARCHIVES --------------#
+#------------------------------------#
+
+
+'''
+def deepinv_sure_spectral_sub_threshold_search(
+    y_np,
+    thresholds,
+    sigma,
+    fs,
+    denoise_func,
+    chunk_size=16384,
+    device=None,
+    tau=0.01,
+    n_sure_repeats=1,
+):
+    """
+    Finds the SURE-minimizing threshold using your actual spectral subtraction
+    function denoise_spectral_sub.
+    """
+
+    if device is None:
+        device = dinv.utils.get_device()
+
+    y_np = np.asarray(y_np, dtype=np.float32)
+
+    if y_np.ndim != 1:
+        raise ValueError("y_np must be a mono 1D NumPy array.")
+
+    if sigma <= 0:
+        raise ValueError("sigma must be positive.")
+
+    thresholds = np.asarray(thresholds, dtype=float)
+
+    original_len = len(y_np)
+
+    pad_len = (-original_len) % chunk_size
+
+    if pad_len > 0:
+        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
+    else:
+        y_padded = y_np
+
+    chunks = y_padded.reshape(-1, chunk_size)
+
+    # DeepInv expects image-like tensors: [B, C, H, W]
+    # For 1D audio, we use [chunks, 1, 1, chunk_size]
+    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
+
+    physics = dinv.physics.Denoising(
+        noise_model=dinv.physics.GaussianNoise(sigma=float(sigma))
+    )
+
+    sure_loss = dinv.loss.SureGaussianLoss(
+        sigma=float(sigma),
+        tau=float(tau)
+    )
+
+    sure_values = []
+
+    for threshold in thresholds:
+
+        model = SpectralSubNumpyWrapper(
+            denoise_func=denoise_func,
+            sigma=sigma,
+            threshold=threshold,
+            fs=fs
+        ).to(device)
+
+        x_net = model(y_tensor)
+
+        repeated_losses = []
+
+        for _ in range(n_sure_repeats):
+            loss = sure_loss(
+                x_net=x_net,
+                y=y_tensor,
+                physics=physics,
+                model=model,
+            )
+
+            repeated_losses.append(loss.detach().mean().cpu().item())
+
+        sure_scalar = float(np.mean(repeated_losses))
+        sure_values.append(sure_scalar)
+
+    sure_values = np.asarray(sure_values)
+
+    best_idx = int(np.argmin(sure_values))
+    best_threshold = float(thresholds[best_idx])
+
+    print("SURE best index:", best_idx, "/", len(thresholds) - 1)
+    print("SURE best threshold:", best_threshold)
+    print("SURE first value:", sure_values[0])
+    print("SURE best value:", sure_values[best_idx])
+    print("SURE last value:", sure_values[-1])
+
+    if best_idx == len(thresholds) - 1:
+        print("WARNING: SURE selected the maximum tested threshold.")
+
+    best_model = SpectralSubNumpyWrapper(
+        denoise_func=denoise_func,
+        sigma=sigma,
+        threshold=best_threshold,
+        fs=fs
+    ).to(device)
+
+    with torch.no_grad():
+        x_best = best_model(y_tensor)
+
+    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
+    best_denoised = denoised_chunks.reshape(-1)[:original_len]
+
+    return best_denoised, best_threshold, sure_values
+
+
+class SpectralSubNumpyWrapper(nn.Module):
+    """
+    Wraps your actual NumPy spectral subtraction function so DeepInv can call it.
+
+    Your denoise function must look like:
+        denoise_spectral_sub(y, sigma, threshold, fs) -> (t_denoise, y_denoise)
+
+    Input tensor shape:
+        [B, 1, 1, T]
+
+    Output tensor shape:
+        [B, 1, 1, T]
+    """
+
+    def __init__(self, denoise_func, sigma, threshold, fs):
+        super().__init__()
+        self.denoise_func = denoise_func
+        self.sigma = float(sigma)
+        self.threshold = float(threshold)
+        self.fs = float(fs)
+
+    def forward(self, y, *args, **kwargs):
+        device = y.device
+        dtype = y.dtype
+
+        y_cpu = y.detach().cpu().numpy()
+        out = np.zeros_like(y_cpu)
+
+        batch_size = y_cpu.shape[0]
+
+        for i in range(batch_size):
+            signal_1d = y_cpu[i, 0, 0, :]
+
+            _, denoised_1d = self.denoise_func(
+                signal_1d,
+                self.sigma,
+                self.threshold,
+                self.fs
+            )
+
+            denoised_1d = np.asarray(denoised_1d, dtype=y_cpu.dtype)
+
+            # Force same length as input
+            if len(denoised_1d) > len(signal_1d):
+                denoised_1d = denoised_1d[:len(signal_1d)]
+            elif len(denoised_1d) < len(signal_1d):
+                denoised_1d = np.pad(
+                    denoised_1d,
+                    (0, len(signal_1d) - len(denoised_1d)),
+                    mode="constant"
+                )
+
+            out[i, 0, 0, :] = denoised_1d
+
+        return torch.from_numpy(out).to(device=device, dtype=dtype)
+
+
+def deepinv_sure_param_search(
+    y_np,
+    param_values,
+    sigma,
+    fs,
+    denoise_func,
+    chunk_size=16384,
+    device=None,
+    tau=0.01,
+    n_sure_repeats=1,
+    param_name="param",
+):
+    """
+    Finds the SURE-minimizing value of the third denoiser parameter.
+
+    The denoise function must have the format:
+        denoise_func(y, sigma, param, fs) -> (t_denoise, y_denoise)
+
+    Examples
+    --------
+    Spectral subtraction:
+        param = threshold
+
+    Demucs:
+        param = drywet
+
+    SGMSE:
+        param = N, if your SGMSE function interprets the third argument as N
+    """
+
+    if device is None:
+        device = dinv.utils.get_device()
+
+    y_np = np.asarray(y_np, dtype=np.float32)
+
+    if y_np.ndim != 1:
+        raise ValueError("y_np must be a mono 1D NumPy array.")
+
+    if sigma <= 0:
+        raise ValueError("sigma must be positive.")
+
+    param_values = np.asarray(param_values, dtype=float)
+
+    original_len = len(y_np)
+
+    pad_len = (-original_len) % chunk_size
+
+    if pad_len > 0:
+        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
+    else:
+        y_padded = y_np
+
+    chunks = y_padded.reshape(-1, chunk_size)
+
+    # DeepInv expects image-like tensors: [B, C, H, W]
+    # For 1D audio, we use [chunks, 1, 1, chunk_size]
+    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
+
+    physics = dinv.physics.Denoising(
+        noise_model=dinv.physics.GaussianNoise(sigma=float(sigma))
+    )
+
+    sure_loss = dinv.loss.SureGaussianLoss(
+        sigma=float(sigma),
+        tau=float(tau)
+    )
+
+    sure_values = []
+
+    for param in param_values:
+
+        model = NumpyDenoiserWrapper(
+            denoise_func=denoise_func,
+            sigma=sigma,
+            param=param,
+            fs=fs
+        ).to(device)
+
+        x_net = model(y_tensor)
+
+        repeated_losses = []
+
+        for _ in range(n_sure_repeats):
+            loss = sure_loss(
+                x_net=x_net,
+                y=y_tensor,
+                physics=physics,
+                model=model,
+            )
+
+            repeated_losses.append(loss.detach().mean().cpu().item())
+
+        sure_scalar = float(np.mean(repeated_losses))
+        sure_values.append(sure_scalar)
+
+    sure_values = np.asarray(sure_values)
+
+    best_idx = int(np.argmin(sure_values))
+    best_param = float(param_values[best_idx])
+
+    print("SURE best index:", best_idx, "/", len(param_values) - 1)
+    print(f"SURE best {param_name}:", best_param)
+    print("SURE first value:", sure_values[0])
+    print("SURE best value:", sure_values[best_idx])
+    print("SURE last value:", sure_values[-1])
+
+    if best_idx == len(param_values) - 1:
+        print(f"WARNING: SURE selected the maximum tested {param_name}.")
+
+    if best_idx == 0:
+        print(f"WARNING: SURE selected the minimum tested {param_name}.")
+
+    best_model = NumpyDenoiserWrapper(
+        denoise_func=denoise_func,
+        sigma=sigma,
+        param=best_param,
+        fs=fs
+    ).to(device)
+
+    with torch.no_grad():
+        x_best = best_model(y_tensor)
+
+    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
+    best_denoised = denoised_chunks.reshape(-1)[:original_len]
+
+    return best_denoised, best_param, sure_values
+
+
+class NumpyDenoiserWrapper(nn.Module):
+    def __init__(self, denoise_func, sigma, param, fs):
+        super().__init__()
+        self.denoise_func = denoise_func
+        self.sigma = float(sigma)
+        self.param = float(param)
+        self.fs = int(fs)
+
+    def forward(self, y, *args, **kwargs):
+        input_device = y.device
+        input_dtype = y.dtype
+
+        y_cpu = y.detach().cpu().numpy()
+        out = np.zeros_like(y_cpu)
+
+        batch_size = y_cpu.shape[0]
+
+        for i in range(batch_size):
+            signal_1d = y_cpu[i, 0, 0, :]
+
+            _, denoised_1d = self.denoise_func(
+                signal_1d,
+                self.sigma,
+                self.param,
+                self.fs
+            )
+
+            denoised_1d = np.asarray(denoised_1d, dtype=y_cpu.dtype)
+
+            if len(denoised_1d) > len(signal_1d):
+                denoised_1d = denoised_1d[:len(signal_1d)]
+            elif len(denoised_1d) < len(signal_1d):
+                denoised_1d = np.pad(
+                    denoised_1d,
+                    (0, len(signal_1d) - len(denoised_1d)),
+                    mode="constant"
+                )
+
+            out[i, 0, 0, :] = denoised_1d
+
+        return torch.from_numpy(out).to(device=input_device, dtype=input_dtype)
+
+#DEMUCS
+from denoiser import pretrained #DEMUCS
+from denoiser.dsp import convert_audio
+
+
+def denoise_demucs(y,sigma,threshold,fs)
+    #Detection de GPU/CPU
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    #Import du fichier sonore et modele DEMUCS
+    sound,samplerate=y,fs
+    
+    model = getattr(pretrained, params['demucs_pretrained_model'])()
+    model = model.to(device)
+    model.eval()
+    model_sample_rate=model.sample_rate
+
+    sound_t=torch.from_numpy(sound).float()[None, :]
+    sound=convert_audio(sound_tensor,samplerate,model_sample_rate,1)[0].detach().cpu().numpy()
+
+    
+    sound_t=convert_audio(torch.from_numpy(sound).float()[None, :],samplerate,model_sample_rate,1)[0].detach().cpu().numpy()
+
+    
+    with torch.no_grad():
+
+
+
+        #Debruitage DEMUCS
+        son_bt = torch.from_numpy(son_b).float()[None, :].to(device)
+        son_dt=model(son_bt[None])
+        y_denoise=son_dt[0, 0].detach().cpu().numpy()
+
+    return t_denoise,y_denoise
+
+
+def deepinv_sure_demucs_drywet_search_cached(
+    y_np,
+    drywet_values,
+    sigma,
+    fs,
+    chunk_size=65536,
+    device=None,
+    tau=0.01,
+    n_sure_repeats=1,
+    param_name="drywet",
+):
+    """
+    SURE search for DEMUCS dry/wet without rerunning DEMUCS for every dry/wet.
+
+    Instead of doing:
+
+        for drywet in drywet_values:
+            run DEMUCS
+            compute SURE
+
+    this function does:
+
+        run DEMUCS once on y
+        run DEMUCS once per SURE perturbation
+        evaluate all dry/wet values cheaply by linear interpolation
+
+    Denoiser form:
+        A_drywet(y) = drywet * DEMUCS(y) + (1 - drywet) * y
+
+    This keeps the finite-difference SURE estimate correct for the dry/wet
+    family, while avoiding repeated DEMUCS calls for every dry/wet value.
+    """
+
+    if device is None:
+        device = dinv.utils.get_device()
+
+    y_np = np.asarray(y_np, dtype=np.float32)
+
+    if y_np.ndim != 1:
+        raise ValueError("y_np must be a mono 1D NumPy array.")
+
+    if sigma <= 0:
+        raise ValueError("sigma must be positive.")
+
+    drywet_values = np.asarray(drywet_values, dtype=float)
+
+    if np.any(drywet_values < 0) or np.any(drywet_values > 1):
+        raise ValueError("drywet_values should be between 0 and 1.")
+
+    original_len = len(y_np)
+
+    pad_len = (-original_len) % chunk_size
+
+    if pad_len > 0:
+        y_padded = np.pad(y_np, (0, pad_len), mode="reflect")
+    else:
+        y_padded = y_np
+
+    chunks = y_padded.reshape(-1, chunk_size)
+
+    # DeepInv-style tensor shape for 1D audio: [chunks, 1, 1, chunk_size]
+    y_tensor = torch.from_numpy(chunks[:, None, None, :]).to(device)
+
+    # Number of scalar samples per chunk, used for normalized SURE.
+    n_per_chunk = y_tensor[0].numel()
+
+    # ------------------------------------------------------------
+    # 1. Run DEMUCS once on the clean noisy input y.
+    # ------------------------------------------------------------
+    demucs_y = _demucs_forward_tensor_chunks(y_tensor, fs)
+
+    sure_accum = torch.zeros(
+        len(drywet_values),
+        device=device,
+        dtype=y_tensor.dtype,
+    )
+
+    # ------------------------------------------------------------
+    # 2. SURE Monte Carlo loop.
+    #    DEMUCS is run once per perturbation, not once per dry/wet.
+    # ------------------------------------------------------------
+    for _ in range(n_sure_repeats):
+        b = torch.randn_like(y_tensor)
+        y_perturbed = y_tensor + tau * b
+
+        demucs_y_perturbed = _demucs_forward_tensor_chunks(y_perturbed, fs)
+
+        for i, drywet in enumerate(drywet_values):
+            drywet = float(drywet)
+
+            # A(y)
+            x_net = drywet * demucs_y + (1.0 - drywet) * y_tensor
+
+            # A(y + tau b)
+            x_net_perturbed = (
+                drywet * demucs_y_perturbed
+                + (1.0 - drywet) * y_perturbed
+            )
+
+            residual_term = (x_net - y_tensor).pow(2).flatten(1).sum(dim=1)
+            residual_term = residual_term / n_per_chunk
+
+            divergence_term = (
+                b * (x_net_perturbed - x_net) / tau
+            ).flatten(1).sum(dim=1)
+            divergence_term = divergence_term / n_per_chunk
+
+            sure_per_chunk = (
+                residual_term
+                - float(sigma) ** 2
+                + 2.0 * float(sigma) ** 2 * divergence_term
+            )
+
+            sure_accum[i] += sure_per_chunk.mean()
+
+    sure_values = (sure_accum / n_sure_repeats).detach().cpu().numpy()
+
+    best_idx = int(np.argmin(sure_values))
+    best_drywet = float(drywet_values[best_idx])
+
+    print("SURE best index:", best_idx, "/", len(drywet_values) - 1)
+    print(f"SURE best {param_name}:", best_drywet)
+    print("SURE first value:", sure_values[0])
+    print("SURE best value:", sure_values[best_idx])
+    print("SURE last value:", sure_values[-1])
+
+    if best_idx == len(drywet_values) - 1:
+        print(f"WARNING: SURE selected the maximum tested {param_name}.")
+
+    if best_idx == 0:
+        print(f"WARNING: SURE selected the minimum tested {param_name}.")
+
+    # ------------------------------------------------------------
+    # 3. Build best denoised signal without rerunning DEMUCS.
+    # ------------------------------------------------------------
+    with torch.no_grad():
+        x_best = best_drywet * demucs_y + (1.0 - best_drywet) * y_tensor
+
+    denoised_chunks = x_best.detach().cpu().numpy()[:, 0, 0, :]
+    best_denoised = denoised_chunks.reshape(-1)[:original_len]
+
+    return best_denoised, best_drywet, sure_values
